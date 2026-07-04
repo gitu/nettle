@@ -3,12 +3,11 @@ use std::time::Duration;
 
 use russh::ChannelMsg;
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::AppHandle;
 use tokio::sync::mpsc;
 
-use crate::ipc::events::emit_term_closed;
 use crate::ssh::session::SessionCmd;
 use crate::ssh::{ConnectionEpoch, EpochRx};
+use crate::state::UiBridge;
 
 const FLUSH_BYTES: usize = 8 * 1024;
 const FLUSH_MS: u64 = 8;
@@ -40,7 +39,7 @@ impl TerminalHandle {
 /// output to the frontend. Survives reconnects by reopening the shell on each
 /// new epoch, announcing what happened inline.
 pub fn open(
-    app: AppHandle,
+    ui: std::sync::Arc<UiBridge>,
     mut epoch_rx: EpochRx,
     session_cmd: mpsc::UnboundedSender<SessionCmd>,
     cols: u32,
@@ -132,7 +131,7 @@ pub fn open(
                         Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::Close) | None => {
                             // Shell ended while the connection is alive (e.g. `exit`).
                             flush(&on_data, &mut pending);
-                            emit_term_closed(&app);
+                            ui.emit_term_closed();
                             return;
                         }
                         Some(_) => {}

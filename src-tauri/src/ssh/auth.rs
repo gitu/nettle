@@ -4,13 +4,12 @@ use russh::client;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
-use tauri::AppHandle;
 
 use crate::config::HostConfig;
 use crate::error::{NettleError, Result};
 use crate::ipc::types::AuthRequest;
 use crate::ssh::handler::ClientHandler;
-use crate::state::Prompts;
+use crate::state::UiBridge;
 
 /// Secrets entered by the user, kept in memory for the lifetime of the session
 /// so auto-reconnect never re-prompts. Never persisted.
@@ -25,20 +24,19 @@ pub struct SecretCache {
 pub async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     host: &HostConfig,
-    app: &AppHandle,
-    prompts: &Prompts,
+    ui: &UiBridge,
     cache: &mut SecretCache,
     interactive: bool,
 ) -> Result<()> {
     if try_agent(handle, host).await {
         return Ok(());
     }
-    if let Some(done) = try_key_file(handle, host, app, prompts, cache, interactive).await? {
+    if let Some(done) = try_key_file(handle, host, ui, cache, interactive).await? {
         if done {
             return Ok(());
         }
     }
-    if try_password(handle, host, app, prompts, cache, interactive).await? {
+    if try_password(handle, host, ui, cache, interactive).await? {
         return Ok(());
     }
     Err(NettleError::AuthFailed)
@@ -90,8 +88,7 @@ async fn try_agent(handle: &mut client::Handle<ClientHandler>, host: &HostConfig
 async fn try_key_file(
     handle: &mut client::Handle<ClientHandler>,
     host: &HostConfig,
-    app: &AppHandle,
-    prompts: &Prompts,
+    ui: &UiBridge,
     cache: &mut SecretCache,
     interactive: bool,
 ) -> Result<Option<bool>> {
@@ -104,9 +101,8 @@ async fn try_key_file(
         Ok(key) => key,
         Err(_) if interactive => {
             // Probably encrypted (or wrong cached passphrase) — ask the user.
-            let Some(pass) = prompts
+            let Some(pass) = ui
                 .ask_secret(
-                    app,
                     AuthRequest {
                         kind: "keyPassphrase".into(),
                         username: host.username.clone(),
@@ -146,8 +142,7 @@ async fn try_key_file(
 async fn try_password(
     handle: &mut client::Handle<ClientHandler>,
     host: &HostConfig,
-    app: &AppHandle,
-    prompts: &Prompts,
+    ui: &UiBridge,
     cache: &mut SecretCache,
     interactive: bool,
 ) -> Result<bool> {
@@ -162,9 +157,8 @@ async fn try_password(
     if !interactive {
         return Ok(false);
     }
-    let Some(password) = prompts
+    let Some(password) = ui
         .ask_secret(
-            app,
             AuthRequest {
                 kind: "password".into(),
                 username: host.username.clone(),

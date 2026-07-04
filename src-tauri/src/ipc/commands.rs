@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, State};
+use tauri::State;
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -51,11 +51,7 @@ pub async fn delete_host(state: State<'_, AppState>, host_id: Uuid) -> Result<()
 // ---------- connection ----------
 
 #[tauri::command]
-pub async fn connect(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    host_id: Uuid,
-) -> Result<()> {
+pub async fn connect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
     let host = state
         .store
         .load_hosts()
@@ -81,16 +77,16 @@ pub async fn connect(
         .map(|p| p.port)
         .collect();
 
+    let ui = state.ui.clone();
     let (cmd_tx, epoch_rx, actor_task) = SessionActor::spawn(
-        app.clone(),
+        ui.clone(),
         host.clone(),
-        state.prompts.clone(),
         state.store.known_hosts_path(),
     );
 
     let (ports_live_tx, ports_live_rx) = watch::channel(HashSet::new());
     let forwards = ForwardManager::new(
-        app.clone(),
+        ui.clone(),
         host_id,
         state.store.clone(),
         epoch_rx.clone(),
@@ -98,7 +94,7 @@ pub async fn connect(
     );
     let ignored_shared = Arc::new(StdMutex::new(ignored));
     let scanner_task = scanner::spawn(
-        app.clone(),
+        ui.clone(),
         epoch_rx.clone(),
         forwards.clone(),
         ports_live_tx,
@@ -114,7 +110,7 @@ pub async fn connect(
 
     let session = Arc::new(ActiveSession {
         browser: SftpBrowser::new(epoch_rx.clone()),
-        transfers: TransferManager::new(app.clone(), epoch_rx.clone()),
+        transfers: TransferManager::new(ui, epoch_rx.clone()),
         terminal: StdMutex::new(None),
         host,
         cmd_tx,
@@ -159,17 +155,17 @@ pub async fn disconnect(state: State<'_, AppState>) -> Result<()> {
 
 #[tauri::command]
 pub fn get_connection_state(state: State<'_, AppState>) -> ConnState {
-    state.conn_state.lock().unwrap().clone()
+    state.ui.conn_state.lock().unwrap().clone()
 }
 
 #[tauri::command]
 pub fn host_key_decision(state: State<'_, AppState>, accept: bool) {
-    state.prompts.answer_host_key(accept);
+    state.ui.prompts.answer_host_key(accept);
 }
 
 #[tauri::command]
 pub fn provide_secret(state: State<'_, AppState>, secret: Option<String>) {
-    state.prompts.answer_secret(secret);
+    state.ui.prompts.answer_secret(secret);
 }
 
 // ---------- terminal ----------
@@ -185,7 +181,6 @@ async fn with_session(state: &State<'_, AppState>) -> Result<Arc<ActiveSession>>
 
 #[tauri::command]
 pub async fn term_open(
-    app: AppHandle,
     state: State<'_, AppState>,
     cols: u32,
     rows: u32,
@@ -193,7 +188,7 @@ pub async fn term_open(
 ) -> Result<()> {
     let session = with_session(&state).await?;
     let handle = terminal::open(
-        app,
+        state.ui.clone(),
         session.epoch_rx.clone(),
         session.cmd_tx.clone(),
         cols,

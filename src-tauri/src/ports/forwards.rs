@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use tauri::AppHandle;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -10,9 +9,9 @@ use uuid::Uuid;
 
 use crate::config::{ConfigStore, HostPort};
 use crate::error::{NettleError, Result};
-use crate::ipc::events::emit_forwards;
 use crate::ipc::types::ForwardInfo;
 use crate::ssh::EpochRx;
+use crate::state::UiBridge;
 
 /// Grace period for holding an accepted local connection while the remote
 /// process (or the SSH link) comes back.
@@ -27,7 +26,7 @@ struct Entry {
 /// is bound once and survives SSH reconnects and remote process restarts —
 /// only the user removing the forward tears it down.
 pub struct ForwardManager {
-    app: AppHandle,
+    ui: Arc<UiBridge>,
     host_id: Uuid,
     store: ConfigStore,
     epoch_rx: EpochRx,
@@ -37,14 +36,14 @@ pub struct ForwardManager {
 
 impl ForwardManager {
     pub fn new(
-        app: AppHandle,
+        ui: Arc<UiBridge>,
         host_id: Uuid,
         store: ConfigStore,
         epoch_rx: EpochRx,
         ports_live_rx: watch::Receiver<HashSet<u16>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            app,
+            ui,
             host_id,
             store,
             epoch_rx,
@@ -71,7 +70,7 @@ impl ForwardManager {
     }
 
     fn broadcast(&self) {
-        emit_forwards(&self.app, &self.list());
+        self.ui.emit_forwards(&self.list());
     }
 
     /// Called by the scanner after each scan.
@@ -80,6 +79,18 @@ impl ForwardManager {
     }
 
     pub async fn set(self: &Arc<Self>, port: u16, enabled: bool, pinned: bool) -> Result<()> {
+        self.set_with_local(port, port, enabled, pinned).await
+    }
+
+    /// Like `set`, but with an explicit local bind port (used by tests where
+    /// the remote port number is already taken on the local machine).
+    pub async fn set_with_local(
+        self: &Arc<Self>,
+        port: u16,
+        local_port: u16,
+        enabled: bool,
+        pinned: bool,
+    ) -> Result<()> {
         if !enabled {
             let entry = self.entries.lock().unwrap().remove(&port);
             if let Some(entry) = entry {
@@ -105,9 +116,9 @@ impl ForwardManager {
             return Ok(());
         }
 
-        let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
-            NettleError::Msg(format!("cannot bind localhost:{port}: {e}"))
-        })?;
+        let listener = TcpListener::bind(("127.0.0.1", local_port))
+            .await
+            .map_err(|e| NettleError::Msg(format!("cannot bind localhost:{local_port}: {e}")))?;
         let stop = CancellationToken::new();
         self.entries.lock().unwrap().insert(
             port,

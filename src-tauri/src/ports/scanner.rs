@@ -2,12 +2,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::AppHandle;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::ipc::events::emit_ports;
 use crate::ipc::types::{PortsChanged, RemotePort};
+use crate::state::UiBridge;
 use crate::ports::forwards::ForwardManager;
 use crate::ports::parse;
 use crate::ssh::session::SessionCmd;
@@ -26,7 +25,7 @@ enum Method {
 /// Periodically list listening TCP ports on the remote, diff, and fan out:
 /// `ports-changed` events to the UI and the live-port set to the ForwardManager.
 pub fn spawn(
-    app: AppHandle,
+    ui: Arc<UiBridge>,
     mut epoch_rx: EpochRx,
     forwards: Arc<ForwardManager>,
     ports_live_tx: watch::Sender<HashSet<u16>>,
@@ -71,8 +70,7 @@ pub fn spawn(
 
                         let changed = deduped != prev_rows;
                         if baseline || changed {
-                            emit_ports(
-                                &app,
+                            ui.emit_ports(
                                 &PortsChanged {
                                     all: deduped.clone(),
                                     added: if baseline { Vec::new() } else { added },

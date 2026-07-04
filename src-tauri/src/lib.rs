@@ -1,18 +1,18 @@
-mod config;
-mod error;
-mod ipc;
-mod local_fs;
-mod ports;
-mod sftp;
-mod ssh;
-mod state;
-mod terminal;
+pub mod config;
+pub mod error;
+pub mod ipc;
+pub mod local_fs;
+pub mod ports;
+pub mod sftp;
+pub mod ssh;
+pub mod state;
+pub mod terminal;
 
 use tauri::Manager;
 
 use config::ConfigStore;
 use ipc::commands;
-use state::AppState;
+use state::{AppState, UiBridge};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,7 +20,8 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
-            app.manage(AppState::new(ConfigStore::new(config_dir)));
+            let ui = UiBridge::new(Box::new(app.handle().clone()));
+            app.manage(AppState::new(ConfigStore::new(config_dir), ui));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

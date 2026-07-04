@@ -4,14 +4,12 @@ use std::time::{Duration, Instant};
 
 use russh_sftp::protocol::OpenFlags;
 use tauri::ipc::Channel;
-use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{NettleError, Result};
-use crate::ipc::events::emit_transfer;
 use crate::ipc::types::{TransferDirection, TransferMeta, TransferProgress, TransferStatus};
 use crate::sftp::open_sftp;
 use crate::ssh::{current_epoch, EpochRx};
@@ -26,16 +24,16 @@ struct Entry {
 }
 
 pub struct TransferManager {
-    app: AppHandle,
+    ui: Arc<crate::state::UiBridge>,
     epoch_rx: EpochRx,
     semaphore: Arc<Semaphore>,
     entries: StdMutex<HashMap<Uuid, Entry>>,
 }
 
 impl TransferManager {
-    pub fn new(app: AppHandle, epoch_rx: EpochRx) -> Arc<Self> {
+    pub fn new(ui: Arc<crate::state::UiBridge>, epoch_rx: EpochRx) -> Arc<Self> {
         Arc::new(Self {
-            app,
+            ui,
             epoch_rx,
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT)),
             entries: StdMutex::new(HashMap::new()),
@@ -75,7 +73,7 @@ impl TransferManager {
             f(&mut entry.meta);
             entry.meta.clone()
         };
-        emit_transfer(&self.app, &meta);
+        self.ui.emit_transfer(&meta);
     }
 
     pub fn start(
@@ -101,7 +99,7 @@ impl TransferManager {
             bytes: 0,
             error: None,
         };
-        emit_transfer(&self.app, &meta);
+        self.ui.emit_transfer(&meta);
         self.entries.lock().unwrap().insert(
             id,
             Entry {
