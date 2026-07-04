@@ -15,12 +15,33 @@ export interface HostConfig {
 }
 
 export type ConnState =
-  | { state: 'disconnected' }
+  | { state: 'disconnected'; hostId: string }
   | { state: 'connecting'; hostId: string }
   | { state: 'authenticating'; hostId: string }
   | { state: 'connected'; hostId: string; ip: string; sinceMs: number; epoch: number }
   | { state: 'reconnecting'; hostId: string; attempt: number; nextRetryMs: number | null }
   | { state: 'failed'; hostId: string; error: string };
+
+export interface SessionInfo {
+  hostId: string;
+  conn: ConnState;
+}
+
+export interface Settings {
+  keepConnections: boolean;
+}
+
+export interface ConnectionSet {
+  id: string;
+  name: string;
+  hostIds: string[];
+}
+
+export interface HostForward {
+  hostId: string;
+  hostName: string;
+  forward: ForwardInfo;
+}
 
 export interface FileEntry {
   name: string;
@@ -42,11 +63,17 @@ export interface RemotePort {
 }
 
 export interface PortsChanged {
+  hostId: string;
   all: RemotePort[];
   added: RemotePort[];
   removed: number[];
   isBaseline: boolean;
   unsupported: boolean;
+}
+
+export interface ForwardsChanged {
+  hostId: string;
+  forwards: ForwardInfo[];
 }
 
 export interface ForwardInfo {
@@ -60,6 +87,7 @@ export type TransferStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancell
 
 export interface TransferMeta {
   id: string;
+  hostId: string;
   name: string;
   direction: TransferDirection;
   status: TransferStatus;
@@ -101,36 +129,50 @@ export const api = {
   deleteHost: (hostId: string) => invoke<void>('delete_host', { hostId }),
 
   connect: (hostId: string) => invoke<void>('connect', { hostId }),
-  disconnect: () => invoke<void>('disconnect'),
-  getConnectionState: () => invoke<ConnState>('get_connection_state'),
+  disconnect: (hostId: string) => invoke<void>('disconnect', { hostId }),
+  disconnectAll: () => invoke<void>('disconnect_all'),
+  listSessions: () => invoke<SessionInfo[]>('list_sessions'),
   hostKeyDecision: (accept: boolean) => invoke<void>('host_key_decision', { accept }),
   provideSecret: (secret: string | null) => invoke<void>('provide_secret', { secret }),
 
-  termOpen: (cols: number, rows: number, onData: Channel<TermData>) =>
-    invoke<void>('term_open', { cols, rows, onData }),
-  termWrite: (data: number[]) => invoke<void>('term_write', { data }),
-  termResize: (cols: number, rows: number) => invoke<void>('term_resize', { cols, rows }),
-  termClose: () => invoke<void>('term_close'),
+  getSettings: () => invoke<Settings>('get_settings'),
+  setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),
 
-  sftpList: (path: string) => invoke<DirListing>('sftp_list', { path }),
-  sftpHome: () => invoke<string>('sftp_home'),
+  listSets: () => invoke<ConnectionSet[]>('list_sets'),
+  saveSet: (set: ConnectionSet) => invoke<ConnectionSet>('save_set', { set }),
+  deleteSet: (setId: string) => invoke<void>('delete_set', { setId }),
+  connectSet: (setId: string) => invoke<void>('connect_set', { setId }),
+
+  termOpen: (hostId: string, cols: number, rows: number, onData: Channel<TermData>) =>
+    invoke<void>('term_open', { hostId, cols, rows, onData }),
+  termWrite: (hostId: string, data: number[]) => invoke<void>('term_write', { hostId, data }),
+  termResize: (hostId: string, cols: number, rows: number) =>
+    invoke<void>('term_resize', { hostId, cols, rows }),
+  termClose: (hostId: string) => invoke<void>('term_close', { hostId }),
+
+  sftpList: (hostId: string, path: string) => invoke<DirListing>('sftp_list', { hostId, path }),
+  sftpHome: (hostId: string) => invoke<string>('sftp_home', { hostId }),
   localList: (path: string) => invoke<DirListing>('local_list', { path }),
   localHomeDir: () => invoke<string>('local_home_dir'),
 
   transferStart: (
+    hostId: string,
     direction: TransferDirection,
     remotePath: string,
     localPath: string,
     onProgress: Channel<TransferProgress>,
-  ) => invoke<string>('transfer_start', { direction, remotePath, localPath, onProgress }),
-  transferCancel: (id: string) => invoke<void>('transfer_cancel', { id }),
-  transferList: () => invoke<TransferMeta[]>('transfer_list'),
-  transferClearFinished: () => invoke<void>('transfer_clear_finished'),
+  ) => invoke<string>('transfer_start', { hostId, direction, remotePath, localPath, onProgress }),
+  transferCancel: (hostId: string, id: string) =>
+    invoke<void>('transfer_cancel', { hostId, id }),
+  transferList: (hostId: string) => invoke<TransferMeta[]>('transfer_list', { hostId }),
+  transferClearFinished: (hostId: string) =>
+    invoke<void>('transfer_clear_finished', { hostId }),
 
-  forwardSet: (port: number, enabled: boolean, pinned: boolean) =>
-    invoke<void>('forward_set', { port, enabled, pinned }),
-  forwardList: () => invoke<ForwardInfo[]>('forward_list'),
-  portIgnore: (port: number) => invoke<void>('port_ignore', { port }),
+  forwardSet: (hostId: string, port: number, enabled: boolean, pinned: boolean) =>
+    invoke<void>('forward_set', { hostId, port, enabled, pinned }),
+  forwardList: (hostId: string) => invoke<ForwardInfo[]>('forward_list', { hostId }),
+  allForwards: () => invoke<HostForward[]>('all_forwards'),
+  portIgnore: (hostId: string, port: number) => invoke<void>('port_ignore', { hostId, port }),
 
   windowControl: (action: 'close' | 'minimize' | 'maximize') =>
     invoke<void>('window_control', { action }),

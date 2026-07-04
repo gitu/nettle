@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 .remember/
 .playwright-mcp/
+multi.png
+footer-*.png

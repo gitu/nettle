@@ -2,20 +2,23 @@ import { api } from '../ipc';
 import { useStore } from '../store';
 
 export function Toast() {
-  const toast = useStore((s) => s.toast);
+  const hostId = useStore((s) => s.focusedHostId);
+  const toast = useStore((s) => (hostId ? (s.sessions[hostId]?.toast ?? null) : null));
+  const hostName = useStore((s) => s.hosts.find((h) => h.id === hostId)?.name ?? '');
   const dismiss = useStore((s) => s.dismissToast);
-  if (!toast) return null;
+  if (!hostId || !toast) return null;
 
   const forward = (pinned: boolean) => {
-    api.forwardSet(toast.port, true, pinned).catch(() => {});
-    useStore.setState({ toast: null, view: 'ports' });
+    api.forwardSet(hostId, toast.port, true, pinned).catch(() => {});
+    dismiss(hostId);
+    useStore.setState({ view: 'ports' });
   };
 
   return (
     <div className="toast">
       <div className="toast-head">
         <span className="toast-dot" />
-        <span className="toast-label">NEW PORT DETECTED</span>
+        <span className="toast-label">NEW PORT · {hostName.toUpperCase()}</span>
       </div>
       <div className="toast-body">
         Port <b>{toast.port}</b>
@@ -32,8 +35,8 @@ export function Toast() {
         <button
           className="toast-ghost"
           onClick={() => {
-            api.portIgnore(toast.port).catch(() => {});
-            dismiss();
+            api.portIgnore(hostId, toast.port).catch(() => {});
+            dismiss(hostId);
           }}
         >
           Ignore

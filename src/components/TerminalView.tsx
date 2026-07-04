@@ -30,115 +30,168 @@ const THEME = {
   brightWhite: '#e7eaee',
 };
 
+/**
+ * One xterm instance per host, kept alive for the lifetime of the session so
+ * switching hosts or tabs never loses scrollback or restarts the shell. The
+ * instances live outside React; the mounted component just re-parents the
+ * terminal element into its container.
+ */
+interface TermInstance {
+  term: Terminal;
+  fit: FitAddon;
+  generation: number;
+  dispose: () => void;
+}
+
+const registry = new Map<string, TermInstance>();
+
+function ensureTerminal(hostId: string, generation: number): TermInstance {
+  const existing = registry.get(hostId);
+  if (existing && existing.generation === generation) return existing;
+  if (existing) existing.dispose();
+
+  const term = new Terminal({
+    fontFamily: "'IBM Plex Mono', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, monospace",
+    fontSize: 13,
+    lineHeight: 1.25,
+    cursorBlink: true,
+    theme: THEME,
+    scrollback: 8000,
+    allowProposedApi: true,
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = '11';
+
+  const holder = document.createElement('div');
+  holder.style.height = '100%';
+  term.open(holder);
+
+  const encoder = new TextEncoder();
+  const onData = new Channel<TermData>();
+  onData.onmessage = (msg) => {
+    if (msg instanceof ArrayBuffer) term.write(new Uint8Array(msg));
+    else if (msg instanceof Uint8Array) term.write(msg);
+    else if (typeof msg === 'string') term.write(msg);
+    else if (Array.isArray(msg)) term.write(new Uint8Array(msg as number[]));
+  };
+
+  // Wait for the holder to be in the DOM & sized before the first fit.
+  const start = () => {
+    try {
+      fit.fit();
+    } catch {
+      /* not yet laid out */
+    }
+    api.termOpen(hostId, term.cols || 80, term.rows || 24, onData).catch(() => {});
+  };
+
+  const dataDisp = term.onData((s) => {
+    api.termWrite(hostId, Array.from(encoder.encode(s))).catch(() => {});
+  });
+  const resizeDisp = term.onResize(({ cols, rows }) => {
+    api.termResize(hostId, cols, rows).catch(() => {});
+  });
+
+  const instance: TermInstance = {
+    term,
+    fit,
+    generation,
+    dispose: () => {
+      dataDisp.dispose();
+      resizeDisp.dispose();
+      api.termClose(hostId).catch(() => {});
+      term.dispose();
+      holder.remove();
+      registry.delete(hostId);
+    },
+  };
+  (instance as unknown as { holder: HTMLElement }).holder = holder;
+  registry.set(hostId, instance);
+  // start after the element gets attached in the effect
+  queueMicrotask(start);
+  return instance;
+}
+
+export function disposeTerminal(hostId: string) {
+  registry.get(hostId)?.dispose();
+}
+
 export function TerminalView() {
-  const ref = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const connected = useStore((s) => s.conn.state === 'connected' || s.conn.state === 'reconnecting');
-  const termGeneration = useStore((s) => s.termGeneration);
-  const termClosed = useStore((s) => s.termClosed);
+  const hostId = useStore((s) => s.focusedHostId);
+  const session = useStore((s) => (hostId ? s.sessions[hostId] : null));
+  const connected = session?.conn.state === 'connected' || session?.conn.state === 'reconnecting';
+  const generation = session?.termGeneration ?? 0;
+  const termClosed = session?.termClosed ?? false;
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!ref.current || !connected) return;
-
-    const term = new Terminal({
-      // Symbols Nerd Font Mono fills in powerline/devicon glyphs (PUA) that
-      // Plex Mono lacks; common user-installed Nerd Fonts come first so a
-      // full NF setup wins if present.
-      fontFamily:
-        "'IBM Plex Mono', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, monospace",
-      fontSize: 13,
-      lineHeight: 1.25,
-      cursorBlink: true,
-      theme: THEME,
-      scrollback: 8000,
-      allowProposedApi: true,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.loadAddon(new Unicode11Addon());
-    term.unicode.activeVersion = '11';
-    term.open(ref.current);
-    fit.fit();
-    // Re-measure once web fonts are in, so the cell grid uses Plex Mono
-    // metrics rather than the fallback font it may have measured first.
-    document.fonts?.ready.then(() => {
-      try {
-        fit.fit();
-      } catch {
-        // terminal already disposed
-      }
-    });
-    termRef.current = term;
-
-    const encoder = new TextEncoder();
-    const onData = new Channel<TermData>();
-    onData.onmessage = (msg) => {
-      if (msg instanceof ArrayBuffer) {
-        term.write(new Uint8Array(msg));
-      } else if (msg instanceof Uint8Array) {
-        term.write(msg);
-      } else if (typeof msg === 'string') {
-        term.write(msg);
-      } else if (Array.isArray(msg)) {
-        term.write(new Uint8Array(msg as number[]));
-      }
-    };
-
-    api.termOpen(term.cols, term.rows, onData).catch(() => {});
-    useStore.setState({ termClosed: false });
-
-    const dataDisp = term.onData((s) => {
-      api.termWrite(Array.from(encoder.encode(s))).catch(() => {});
-    });
-    const resizeDisp = term.onResize(({ cols, rows }) => {
-      api.termResize(cols, rows).catch(() => {});
-    });
+    if (!hostId || !connected || !containerRef.current) return;
+    const instance = ensureTerminal(hostId, generation);
+    const holder = (instance as unknown as { holder: HTMLElement }).holder;
+    containerRef.current.appendChild(holder);
+    instance.term.focus();
 
     const observer = new ResizeObserver(() => {
       try {
-        fit.fit();
+        instance.fit.fit();
       } catch {
-        // ignore fit races during teardown
+        /* ignore */
       }
     });
-    observer.observe(ref.current);
-    term.focus();
+    observer.observe(containerRef.current);
+    // reflow after fonts load
+    document.fonts?.ready.then(() => {
+      try {
+        instance.fit.fit();
+      } catch {
+        /* ignore */
+      }
+    });
 
     return () => {
       observer.disconnect();
-      dataDisp.dispose();
-      resizeDisp.dispose();
-      api.termClose().catch(() => {});
-      term.dispose();
-      termRef.current = null;
+      // detach but keep the instance alive for when we come back
+      if (holder.parentElement) holder.parentElement.removeChild(holder);
     };
-  }, [connected, termGeneration]);
+  }, [hostId, connected, generation]);
+
+  const restart = () => {
+    if (!hostId) return;
+    disposeTerminal(hostId);
+    useStore.setState((s) => {
+      const sess = s.sessions[hostId];
+      if (!sess) return {};
+      return {
+        sessions: {
+          ...s.sessions,
+          [hostId]: { ...sess, termClosed: false, termGeneration: sess.termGeneration + 1 },
+        },
+      };
+    });
+  };
 
   return (
     <div className="view">
-      <div className="term-wrap" onClick={() => termRef.current?.focus()}>
+      <div
+        className="term-wrap"
+        onClick={() => hostId && registry.get(hostId)?.term.focus()}
+      >
         {!connected && (
           <div className="term-closed">
-            <span>Not connected — pick a host to open a shell.</span>
+            <span>Not connected.</span>
           </div>
         )}
         {connected && termClosed && (
           <div className="term-closed">
             <span>Shell session ended.</span>
-            <button
-              className="btn-acc"
-              onClick={() =>
-                useStore.setState((s) => ({
-                  termClosed: false,
-                  termGeneration: s.termGeneration + 1,
-                }))
-              }
-            >
+            <button className="btn-acc" onClick={restart}>
               new shell
             </button>
           </div>
         )}
-        <div ref={ref} style={{ height: '100%' }} />
+        <div ref={containerRef} style={{ height: '100%' }} />
       </div>
     </div>
   );

@@ -21,8 +21,15 @@ day-to-day work against remote dev boxes:
   queue, live progress, and cancellation. Transfers run on their own SSH
   channels and never block the terminal.
 - **Real terminal** — a full PTY shell rendered with xterm.js.
+- **Many hosts at once** — connect to several servers simultaneously; each
+  keeps its own live terminal, tunnels, and transfers. Switching hosts leaves
+  the others running (toggle off in About if you prefer one-at-a-time).
+- **Tunnels dashboard** — one overview of every forward across every connected
+  host, grouped by host, with live/waiting status and quick stop.
+- **Connection sets** — name a group of hosts and bring them all up with one
+  click (e.g. "production" = api + db + cache).
 - **Tray-first** — closing the window hides nettle to the menu bar / system
-  tray; the session and every pinned tunnel keep running in the background.
+  tray; sessions and every pinned tunnel keep running in the background.
 
 ## Install
 

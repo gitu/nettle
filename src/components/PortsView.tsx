@@ -2,9 +2,12 @@ import { useStore } from '../store';
 import { api, type ForwardInfo, type RemotePort } from '../ipc';
 
 export function PortsView() {
-  const ports = useStore((s) => s.ports);
-  const forwards = useStore((s) => s.forwards);
-  const unsupported = useStore((s) => s.portsUnsupported);
+  const hostId = useStore((s) => s.focusedHostId);
+  const ports = useStore((s) => (hostId ? (s.sessions[hostId]?.ports ?? []) : []));
+  const forwards = useStore((s) => (hostId ? (s.sessions[hostId]?.forwards ?? []) : []));
+  const unsupported = useStore((s) => (hostId ? (s.sessions[hostId]?.portsUnsupported ?? false) : false));
+
+  if (!hostId) return null;
 
   const fwdByPort = new Map<number, ForwardInfo>(forwards.map((f) => [f.port, f]));
   const portByNum = new Map<number, RemotePort>(ports.map((p) => [p.port, p]));
@@ -78,13 +81,13 @@ export function PortsView() {
                 <button
                   className={`pin-btn${fwd?.pinned ? ' pinned' : ''}`}
                   title="keep across restarts"
-                  onClick={() => api.forwardSet(port, true, !(fwd?.pinned ?? false))}
+                  onClick={() => api.forwardSet(hostId, port, true, !(fwd?.pinned ?? false))}
                 >
                   ⚲
                 </button>
                 <button
                   className={`tgl-btn${forwarded ? ' on' : ''}`}
-                  onClick={() => api.forwardSet(port, !forwarded, false)}
+                  onClick={() => api.forwardSet(hostId, port, !forwarded, false)}
                 >
                   {forwarded ? 'forwarded' : 'forward'}
                 </button>
@@ -110,7 +113,7 @@ export function PortsView() {
               <span className={`pinned-live${f.live ? '' : ' waiting'}`}>
                 {f.live ? 'active' : 'reconnecting'}
               </span>
-              <button className="unpin-btn" onClick={() => api.forwardSet(f.port, true, false)}>
+              <button className="unpin-btn" onClick={() => api.forwardSet(hostId, f.port, true, false)}>
                 unpin
               </button>
             </div>

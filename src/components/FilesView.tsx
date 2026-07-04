@@ -92,8 +92,8 @@ function Pane({
   );
 }
 
-function TransferQueue() {
-  const transfers = useStore((s) => s.transfers);
+function TransferQueue({ hostId }: { hostId: string }) {
+  const transfers = useStore((s) => s.sessions[hostId]?.transfers ?? {});
   const rows: TransferRow[] = Object.values(transfers).sort((a, b) =>
     a.id < b.id ? 1 : -1,
   );
@@ -108,14 +108,17 @@ function TransferQueue() {
         </span>
         <span className="flex-1" />
         <button className="clear-btn" onClick={() => {
-          api.transferClearFinished().catch(() => {});
-          useStore.setState((s) => ({
-            transfers: Object.fromEntries(
-              Object.entries(s.transfers).filter(
+          api.transferClearFinished(hostId).catch(() => {});
+          useStore.setState((s) => {
+            const sess = s.sessions[hostId];
+            if (!sess) return {};
+            const kept = Object.fromEntries(
+              Object.entries(sess.transfers).filter(
                 ([, t]) => t.status === 'running' || t.status === 'queued',
               ),
-            ),
-          }));
+            );
+            return { sessions: { ...s.sessions, [hostId]: { ...sess, transfers: kept } } };
+          });
         }}>
           clear finished
         </button>
@@ -172,7 +175,7 @@ function TransferQueue() {
               </span>
               <span className="tmeta">{meta}</span>
               {(t.status === 'running' || t.status === 'queued') && (
-                <button className="tcancel" onClick={() => api.transferCancel(t.id)}>
+                <button className="tcancel" onClick={() => api.transferCancel(hostId, t.id)}>
                   ✕
                 </button>
               )}
@@ -185,13 +188,16 @@ function TransferQueue() {
 }
 
 export function FilesView() {
-  const remote = useStore((s) => s.remote);
+  const hostId = useStore((s) => s.focusedHostId);
+  const remote = useStore((s) => (hostId ? (s.sessions[hostId]?.remote ?? null) : null));
+  const remoteSel = useStore((s) => (hostId ? (s.sessions[hostId]?.remoteSel ?? null) : null));
   const local = useStore((s) => s.local);
-  const remoteSel = useStore((s) => s.remoteSel);
   const localSel = useStore((s) => s.localSel);
   const navigateRemote = useStore((s) => s.navigateRemote);
   const navigateLocal = useStore((s) => s.navigateLocal);
   const startTransfer = useStore((s) => s.startTransfer);
+
+  if (!hostId) return null;
 
   return (
     <div className="view">
@@ -200,9 +206,15 @@ export function FilesView() {
           side="remote"
           listing={remote}
           selected={remoteSel}
-          onNavigate={(p) => navigateRemote(p).catch(() => {})}
-          onSelect={(name) => useStore.setState({ remoteSel: name })}
-          onAction={(name) => startTransfer('down', name)}
+          onNavigate={(p) => navigateRemote(hostId, p).catch(() => {})}
+          onSelect={(name) =>
+            useStore.setState((s) => {
+              const sess = s.sessions[hostId];
+              if (!sess) return {};
+              return { sessions: { ...s.sessions, [hostId]: { ...sess, remoteSel: name } } };
+            })
+          }
+          onAction={(name) => startTransfer(hostId, 'down', name)}
         />
         <Pane
           side="local"
@@ -210,10 +222,10 @@ export function FilesView() {
           selected={localSel}
           onNavigate={(p) => navigateLocal(p).catch(() => {})}
           onSelect={(name) => useStore.setState({ localSel: name })}
-          onAction={(name) => startTransfer('up', name)}
+          onAction={(name) => startTransfer(hostId, 'up', name)}
         />
       </div>
-      <TransferQueue />
+      <TransferQueue hostId={hostId} />
     </div>
   );
 }

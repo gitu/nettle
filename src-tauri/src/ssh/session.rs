@@ -67,15 +67,18 @@ impl SessionActor {
         });
 
         'main: loop {
-            ui.emit_conn(if ever_connected {
-                ConnState::Reconnecting {
-                    host_id: host.id,
-                    attempt,
-                    next_retry_ms: None,
-                }
-            } else {
-                ConnState::Connecting { host_id: host.id }
-            });
+            ui.emit_conn(
+                host.id,
+                if ever_connected {
+                    ConnState::Reconnecting {
+                        host_id: host.id,
+                        attempt,
+                        next_retry_ms: None,
+                    }
+                } else {
+                    ConnState::Connecting { host_id: host.id }
+                },
+            );
 
             let (death_tx, mut death_rx) = mpsc::unbounded_channel();
             let interactive = !ever_connected;
@@ -105,12 +108,15 @@ impl SessionActor {
                         connected_at_ms: now_ms(),
                     });
                     let _ = epoch_tx.send(Some(epoch.clone()));
-                    ui.emit_conn(ConnState::Connected {
-                        host_id: host.id,
-                        ip: ip.to_string(),
-                        since_ms: epoch.connected_at_ms,
-                        epoch: epoch_id,
-                    });
+                    ui.emit_conn(
+                        host.id,
+                        ConnState::Connected {
+                            host_id: host.id,
+                            ip: ip.to_string(),
+                            since_ms: epoch.connected_at_ms,
+                            epoch: epoch_id,
+                        },
+                    );
 
                     // Supervise until the connection dies or the user disconnects.
                     loop {
@@ -123,7 +129,7 @@ impl SessionActor {
                                         .handle
                                         .disconnect(russh::Disconnect::ByApplication, "", "en")
                                         .await;
-                                    ui.emit_conn(ConnState::Disconnected);
+                                    ui.emit_conn(host.id, ConnState::Disconnected { host_id: host.id });
                                     break 'main;
                                 }
                                 Some(SessionCmd::SuspectDead(id)) if id == epoch_id => break,
@@ -139,10 +145,13 @@ impl SessionActor {
                 Err(err) => {
                     if !ever_connected {
                         // Initial connect failed: report and stop; the user retries explicitly.
-                        ui.emit_conn(ConnState::Failed {
-                            host_id: host.id,
-                            error: err.to_string(),
-                        });
+                        ui.emit_conn(
+                            host.id,
+                            ConnState::Failed {
+                                host_id: host.id,
+                                error: err.to_string(),
+                            },
+                        );
                         break 'main;
                     }
                 }
@@ -150,16 +159,19 @@ impl SessionActor {
 
             attempt += 1;
             let delay = dns::backoff_delay(attempt);
-            ui.emit_conn(ConnState::Reconnecting {
-                host_id: host.id,
-                attempt,
-                next_retry_ms: Some(delay.as_millis() as u64),
-            });
+            ui.emit_conn(
+                host.id,
+                ConnState::Reconnecting {
+                    host_id: host.id,
+                    attempt,
+                    next_retry_ms: Some(delay.as_millis() as u64),
+                },
+            );
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 cmd = cmd_rx.recv() => {
                     if matches!(cmd, Some(SessionCmd::Disconnect) | None) {
-                        ui.emit_conn(ConnState::Disconnected);
+                        ui.emit_conn(host.id, ConnState::Disconnected { host_id: host.id });
                         break 'main;
                     }
                 }
@@ -197,7 +209,7 @@ impl SessionActor {
             {
                 Ok(Ok(mut handle)) => {
                     if interactive {
-                        ui.emit_conn(ConnState::Authenticating { host_id: host.id });
+                        ui.emit_conn(host.id, ConnState::Authenticating { host_id: host.id });
                     }
                     auth::authenticate(&mut handle, host, ui, cache, interactive).await?;
                     return Ok((handle, addr.ip()));

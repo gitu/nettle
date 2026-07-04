@@ -189,6 +189,7 @@ async fn terminal_shell_roundtrip() {
     });
     let term = nettle_lib::terminal::open(
         h.ui.clone(),
+        h.host.id,
         h.epoch_rx.clone(),
         h.cmd_tx.clone(),
         120,
@@ -234,7 +235,7 @@ async fn sftp_upload_download_roundtrip() {
     let remote_path = format!("{home}/nettle-e2e.bin");
     let down_dst = h._tmp.path().join("download-dst.bin");
 
-    let transfers = TransferManager::new(h.ui.clone(), h.epoch_rx.clone());
+    let transfers = TransferManager::new(h.ui.clone(), h.host.id, h.epoch_rx.clone());
 
     let progress = tauri::ipc::Channel::new(|_| Ok(()));
     let up_id = transfers.start(

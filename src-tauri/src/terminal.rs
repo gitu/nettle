@@ -40,6 +40,7 @@ impl TerminalHandle {
 /// new epoch, announcing what happened inline.
 pub fn open(
     ui: std::sync::Arc<UiBridge>,
+    host_id: uuid::Uuid,
     mut epoch_rx: EpochRx,
     session_cmd: mpsc::UnboundedSender<SessionCmd>,
     cols: u32,
@@ -134,7 +135,7 @@ pub fn open(
                         Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::Close) | None => {
                             // Shell ended while the connection is alive (e.g. `exit`).
                             flush(&on_data, &mut pending);
-                            ui.emit_term_closed();
+                            ui.emit_term_closed(host_id);
                             return;
                         }
                         Some(_) => {}

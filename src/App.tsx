@@ -5,13 +5,16 @@ import { Topbar } from './components/Topbar';
 import { FilesView } from './components/FilesView';
 import { PortsView } from './components/PortsView';
 import { TerminalView } from './components/TerminalView';
+import { DashboardView } from './components/DashboardView';
 import { Toast } from './components/Toast';
 import { AuthModal, HostKeyMismatchModal, HostKeyModal, HostModal } from './components/Modals';
 import { AboutModal } from './components/AboutModal';
+import { SetModal } from './components/SetModal';
 
 export default function App() {
   const view = useStore((s) => s.view);
-  const activeHostId = useStore((s) => s.activeHostId);
+  const focusedHostId = useStore((s) => s.focusedHostId);
+  const hasSession = useStore((s) => (focusedHostId ? !!s.sessions[focusedHostId] : false));
 
   return (
     <div className="app">
@@ -20,7 +23,9 @@ export default function App() {
         <Sidebar />
         <div className="main">
           <Topbar />
-          {!activeHostId ? (
+          {view === 'dashboard' ? (
+            <DashboardView />
+          ) : !hasSession ? (
             <div className="empty-state">
               <div className="glyph">◆</div>
               <div>nettle</div>
@@ -37,6 +42,7 @@ export default function App() {
       </div>
       <Toast />
       <HostModal />
+      <SetModal />
       <HostKeyModal />
       <HostKeyMismatchModal />
       <AuthModal />

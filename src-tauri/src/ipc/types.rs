@@ -8,7 +8,9 @@ use uuid::Uuid;
     rename_all_fields = "camelCase"
 )]
 pub enum ConnState {
-    Disconnected,
+    Disconnected {
+        host_id: Uuid,
+    },
     Connecting {
         host_id: Uuid,
     },
@@ -61,11 +63,34 @@ pub struct RemotePort {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortsChanged {
+    pub host_id: Uuid,
     pub all: Vec<RemotePort>,
     pub added: Vec<RemotePort>,
     pub removed: Vec<u16>,
     pub is_baseline: bool,
     pub unsupported: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    pub host_id: Uuid,
+    pub conn: ConnState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostForward {
+    pub host_id: Uuid,
+    pub host_name: String,
+    pub forward: ForwardInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardsChanged {
+    pub host_id: Uuid,
+    pub forwards: Vec<ForwardInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +123,7 @@ pub enum TransferStatus {
 #[serde(rename_all = "camelCase")]
 pub struct TransferMeta {
     pub id: Uuid,
+    pub host_id: Uuid,
     pub name: String,
     pub direction: TransferDirection,
     pub status: TransferStatus,

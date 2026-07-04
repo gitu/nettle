@@ -70,7 +70,10 @@ impl ForwardManager {
     }
 
     fn broadcast(&self) {
-        self.ui.emit_forwards(&self.list());
+        self.ui.emit_forwards(&crate::ipc::types::ForwardsChanged {
+            host_id: self.host_id,
+            forwards: self.list(),
+        });
     }
 
     /// Called by the scanner after each scan.

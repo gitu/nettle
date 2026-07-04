@@ -2,13 +2,19 @@ import { api } from '../ipc';
 import { useStore } from '../store';
 
 export function TitleBar() {
-  const conn = useStore((s) => s.conn);
+  const sessions = useStore((s) => s.sessions);
   const hosts = useStore((s) => s.hosts);
+  const focusedHostId = useStore((s) => s.focusedHostId);
+
+  const count = Object.keys(sessions).length;
+  const focusedHost = hosts.find((h) => h.id === focusedHostId);
 
   let suffix = 'not connected';
-  if (conn.state !== 'disconnected') {
-    const host = hosts.find((h) => 'hostId' in conn && h.id === conn.hostId);
-    if (host) suffix = `${host.username}@${host.hostname} — ${host.name}`;
+  if (focusedHost) {
+    suffix = `${focusedHost.username}@${focusedHost.hostname}`;
+    if (count > 1) suffix += ` · ${count} sessions`;
+  } else if (count > 0) {
+    suffix = `${count} session${count === 1 ? '' : 's'}`;
   }
 
   return (

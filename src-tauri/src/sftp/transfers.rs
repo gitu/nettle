@@ -25,15 +25,17 @@ struct Entry {
 
 pub struct TransferManager {
     ui: Arc<crate::state::UiBridge>,
+    host_id: Uuid,
     epoch_rx: EpochRx,
     semaphore: Arc<Semaphore>,
     entries: StdMutex<HashMap<Uuid, Entry>>,
 }
 
 impl TransferManager {
-    pub fn new(ui: Arc<crate::state::UiBridge>, epoch_rx: EpochRx) -> Arc<Self> {
+    pub fn new(ui: Arc<crate::state::UiBridge>, host_id: Uuid, epoch_rx: EpochRx) -> Arc<Self> {
         Arc::new(Self {
             ui,
+            host_id,
             epoch_rx,
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT)),
             entries: StdMutex::new(HashMap::new()),
@@ -92,6 +94,7 @@ impl TransferManager {
         let cancel = CancellationToken::new();
         let meta = TransferMeta {
             id,
+            host_id: self.host_id,
             name,
             direction,
             status: TransferStatus::Queued,

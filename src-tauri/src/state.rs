@@ -6,9 +6,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::config::{ConfigStore, HostConfig};
-use crate::ipc::types::{
-    AuthRequest, ConnState, ForwardInfo, HostKeyPrompt, PortsChanged, TransferMeta,
-};
+use crate::ipc::types::{AuthRequest, ConnState, HostKeyPrompt, PortsChanged, TransferMeta};
 use crate::ports::forwards::ForwardManager;
 use crate::sftp::browse::SftpBrowser;
 use crate::sftp::transfers::TransferManager;
@@ -56,7 +54,8 @@ impl Prompts {
 pub struct UiBridge {
     sink: Box<dyn EventSink>,
     pub prompts: Prompts,
-    pub conn_state: StdMutex<ConnState>,
+    /// Last connection state per host, for frontend hydration.
+    pub conn_states: StdMutex<std::collections::HashMap<uuid::Uuid, ConnState>>,
 }
 
 impl UiBridge {
@@ -64,7 +63,7 @@ impl UiBridge {
         Arc::new(Self {
             sink,
             prompts: Prompts::default(),
-            conn_state: StdMutex::new(ConnState::Disconnected),
+            conn_states: StdMutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -73,8 +72,14 @@ impl UiBridge {
         self.sink.emit_json(event, value);
     }
 
-    pub fn emit_conn(&self, state: ConnState) {
-        *self.conn_state.lock().unwrap() = state.clone();
+    pub fn emit_conn(&self, host_id: uuid::Uuid, state: ConnState) {
+        let mut map = self.conn_states.lock().unwrap();
+        if matches!(state, ConnState::Disconnected { .. }) {
+            map.remove(&host_id);
+        } else {
+            map.insert(host_id, state.clone());
+        }
+        drop(map);
         self.emit("connection-state", &state);
     }
 
@@ -82,7 +87,7 @@ impl UiBridge {
         self.emit("ports-changed", payload);
     }
 
-    pub fn emit_forwards(&self, payload: &Vec<ForwardInfo>) {
+    pub fn emit_forwards(&self, payload: &crate::ipc::types::ForwardsChanged) {
         self.emit("forwards-changed", payload);
     }
 
@@ -90,8 +95,8 @@ impl UiBridge {
         self.emit("transfer-updated", payload);
     }
 
-    pub fn emit_term_closed(&self) {
-        self.emit("term-closed", &());
+    pub fn emit_term_closed(&self, host_id: uuid::Uuid) {
+        self.emit("term-closed", &serde_json::json!({ "hostId": host_id }));
     }
 
     pub fn emit_host_key_mismatch(&self, payload: &HostKeyPrompt) {
@@ -167,7 +172,9 @@ pub struct ActiveSession {
 
 pub struct AppState {
     pub store: ConfigStore,
-    pub session: Mutex<Option<Arc<ActiveSession>>>,
+    /// One live session per connected host. Multiple hosts stay connected at
+    /// once when the "keep connections" setting is on.
+    pub sessions: Mutex<std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>>,
     pub ui: Arc<UiBridge>,
     pub vault: Arc<SecretVault>,
 }
@@ -176,7 +183,7 @@ impl AppState {
     pub fn new(store: ConfigStore, ui: Arc<UiBridge>) -> Self {
         Self {
             store,
-            session: Mutex::new(None),
+            sessions: Mutex::new(std::collections::HashMap::new()),
             ui,
             vault: Arc::new(SecretVault::default()),
         }

@@ -26,6 +26,7 @@ enum Method {
 /// `ports-changed` events to the UI and the live-port set to the ForwardManager.
 pub fn spawn(
     ui: Arc<UiBridge>,
+    host_id: uuid::Uuid,
     mut epoch_rx: EpochRx,
     forwards: Arc<ForwardManager>,
     ports_live_tx: watch::Sender<HashSet<u16>>,
@@ -74,6 +75,7 @@ pub fn spawn(
                         let changed = deduped != prev_rows;
                         if baseline || changed {
                             ui.emit_ports(&PortsChanged {
+                                host_id,
                                 all: deduped.clone(),
                                 added: if baseline { Vec::new() } else { added },
                                 removed,
