@@ -117,7 +117,31 @@ cd src-tauri && NETTLE_E2E=1 cargo test --test e2e
 
 CI runs the full suite (fmt, clippy `-D warnings`, unit, E2E against sshd, and
 the frontend build) on every push; tagging `v*` builds and publishes installers
-for all three platforms.
+for all three platforms and bumps the Homebrew cask (needs the
+`HOMEBREW_TAP_TOKEN` secret — a PAT with write access to `gitu/homebrew-tap`).
+
+## Signing macOS builds
+
+Release DMGs are ad-hoc signed until Apple credentials are configured. To ship
+properly signed + notarized builds you need an
+[Apple Developer Program](https://developer.apple.com/programs/) membership,
+then:
+
+1. In Xcode or [developer.apple.com](https://developer.apple.com/account/resources/certificates/list),
+   create a **Developer ID Application** certificate and export it (with its
+   private key) as a `.p12`.
+2. Create an **app-specific password** for your Apple ID at
+   [appleid.apple.com](https://appleid.apple.com) (used for notarization), and
+   note your 10-character **Team ID**.
+3. Add these repository secrets (Settings → Secrets → Actions):
+   - `APPLE_CERTIFICATE` — the `.p12`, base64-encoded (`base64 -i cert.p12 | pbcopy`)
+   - `APPLE_CERTIFICATE_PASSWORD` — the `.p12` export password
+   - `APPLE_SIGNING_IDENTITY` — e.g. `Developer ID Application: Your Name (TEAMID)`
+   - `APPLE_ID`, `APPLE_PASSWORD` (the app-specific password), `APPLE_TEAM_ID`
+
+The release workflow already forwards these to `tauri-action`; the next tagged
+release will be signed, notarized, and stapled automatically — no Gatekeeper
+prompt, and the Homebrew cask caveat can be dropped.
 
 ## License
 
