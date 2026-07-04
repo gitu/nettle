@@ -1,0 +1,211 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
+
+use tauri::AppHandle;
+use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::config::{ConfigStore, HostPort};
+use crate::error::{NettleError, Result};
+use crate::ipc::events::emit_forwards;
+use crate::ipc::types::ForwardInfo;
+use crate::ssh::EpochRx;
+
+/// Grace period for holding an accepted local connection while the remote
+/// process (or the SSH link) comes back.
+const WAIT_GRACE: Duration = Duration::from_secs(20);
+
+struct Entry {
+    pinned: bool,
+    stop: CancellationToken,
+}
+
+/// Local tunnels to remote ports. The core invariant: a forward's TcpListener
+/// is bound once and survives SSH reconnects and remote process restarts —
+/// only the user removing the forward tears it down.
+pub struct ForwardManager {
+    app: AppHandle,
+    host_id: Uuid,
+    store: ConfigStore,
+    epoch_rx: EpochRx,
+    ports_live_rx: watch::Receiver<HashSet<u16>>,
+    entries: StdMutex<HashMap<u16, Entry>>,
+}
+
+impl ForwardManager {
+    pub fn new(
+        app: AppHandle,
+        host_id: Uuid,
+        store: ConfigStore,
+        epoch_rx: EpochRx,
+        ports_live_rx: watch::Receiver<HashSet<u16>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            app,
+            host_id,
+            store,
+            epoch_rx,
+            ports_live_rx,
+            entries: StdMutex::new(HashMap::new()),
+        })
+    }
+
+    pub fn list(&self) -> Vec<ForwardInfo> {
+        let live = self.ports_live_rx.borrow().clone();
+        let mut infos: Vec<ForwardInfo> = self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(port, e)| ForwardInfo {
+                port: *port,
+                pinned: e.pinned,
+                live: live.contains(port),
+            })
+            .collect();
+        infos.sort_by_key(|f| f.port);
+        infos
+    }
+
+    fn broadcast(&self) {
+        emit_forwards(&self.app, &self.list());
+    }
+
+    /// Called by the scanner after each scan.
+    pub fn on_ports_update(&self, _live: &HashSet<u16>) {
+        self.broadcast();
+    }
+
+    pub async fn set(self: &Arc<Self>, port: u16, enabled: bool, pinned: bool) -> Result<()> {
+        if !enabled {
+            let entry = self.entries.lock().unwrap().remove(&port);
+            if let Some(entry) = entry {
+                entry.stop.cancel();
+            }
+            self.persist_pin(port, false).await;
+            self.broadcast();
+            return Ok(());
+        }
+
+        let already = {
+            let mut entries = self.entries.lock().unwrap();
+            if let Some(entry) = entries.get_mut(&port) {
+                entry.pinned = pinned;
+                true
+            } else {
+                false
+            }
+        };
+        if already {
+            self.persist_pin(port, pinned).await;
+            self.broadcast();
+            return Ok(());
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
+            NettleError::Msg(format!("cannot bind localhost:{port}: {e}"))
+        })?;
+        let stop = CancellationToken::new();
+        self.entries.lock().unwrap().insert(
+            port,
+            Entry {
+                pinned,
+                stop: stop.clone(),
+            },
+        );
+        self.persist_pin(port, pinned).await;
+
+        let mgr = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stop.cancelled() => break,
+                    accepted = listener.accept() => {
+                        let Ok((sock, peer)) = accepted else { break };
+                        let epoch_rx = mgr.epoch_rx.clone();
+                        let live_rx = mgr.ports_live_rx.clone();
+                        let conn_stop = stop.child_token();
+                        tokio::spawn(async move {
+                            let _ = proxy(sock, peer, port, epoch_rx, live_rx, conn_stop).await;
+                        });
+                    }
+                }
+            }
+        });
+
+        self.broadcast();
+        Ok(())
+    }
+
+    pub fn shutdown(&self) {
+        let mut entries = self.entries.lock().unwrap();
+        for (_, entry) in entries.drain() {
+            entry.stop.cancel();
+        }
+    }
+
+    async fn persist_pin(&self, port: u16, pinned: bool) {
+        let key = HostPort {
+            host_id: self.host_id,
+            port,
+        };
+        let _ = self
+            .store
+            .update_state(move |s| {
+                s.pinned_forwards.retain(|p| *p != key);
+                if pinned {
+                    s.pinned_forwards.push(key);
+                }
+            })
+            .await;
+    }
+}
+
+/// Proxy one accepted local connection through a direct-tcpip channel.
+async fn proxy(
+    mut sock: tokio::net::TcpStream,
+    peer: std::net::SocketAddr,
+    port: u16,
+    mut epoch_rx: EpochRx,
+    mut live_rx: watch::Receiver<HashSet<u16>>,
+    stop: CancellationToken,
+) -> Result<()> {
+    // Wait (bounded) for a live epoch AND the remote port to be listening.
+    let deadline = tokio::time::Instant::now() + WAIT_GRACE;
+    let epoch = loop {
+        let ready_epoch = epoch_rx.borrow().clone();
+        let port_live = live_rx.borrow().contains(&port);
+        if let Some(e) = ready_epoch {
+            if port_live {
+                break e;
+            }
+        }
+        tokio::select! {
+            _ = stop.cancelled() => return Ok(()),
+            _ = tokio::time::sleep_until(deadline) => return Ok(()),
+            r = epoch_rx.changed() => { if r.is_err() { return Ok(()); } }
+            r = live_rx.changed() => { if r.is_err() { return Ok(()); } }
+        }
+    };
+
+    let channel = epoch
+        .handle
+        .channel_open_direct_tcpip(
+            "127.0.0.1",
+            port as u32,
+            peer.ip().to_string(),
+            peer.port() as u32,
+        )
+        .await?;
+    let mut stream = channel.into_stream();
+
+    tokio::select! {
+        _ = stop.cancelled() => {}
+        _ = epoch.cancel.cancelled() => {}
+        _ = tokio::io::copy_bidirectional(&mut sock, &mut stream) => {}
+    }
+    Ok(())
+}
