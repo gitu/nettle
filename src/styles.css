@@ -1279,3 +1279,6 @@ body {
 .gear-btn:hover {
   color: var(--acc);
 }
+.foot-note.acc {
+  color: var(--acc);
+}

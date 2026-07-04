@@ -8,6 +8,19 @@ export function Sidebar() {
   const activeHostId = useStore((s) => s.activeHostId);
   const connError = useStore((s) => s.connError);
   const connect = useStore((s) => s.connect);
+  const forwards = useStore((s) => s.forwards);
+  const transfers = useStore((s) => s.transfers);
+
+  const isSession = conn.state === 'connected' || conn.state === 'reconnecting';
+  const activeHost = hosts.find((h) => h.id === activeHostId) ?? null;
+  const liveTunnels = forwards.filter((f) => f.live).length;
+  const pinnedCount = forwards.filter((f) => f.pinned).length;
+  const tunnelLabel =
+    `${forwards.length} tunnel${forwards.length === 1 ? '' : 's'}` +
+    (pinnedCount > 0 ? ` · ${pinnedCount} pinned` : '');
+  const activeTransfers = Object.values(transfers).filter(
+    (t) => t.status === 'running' || t.status === 'queued',
+  ).length;
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -102,21 +115,49 @@ export function Sidebar() {
           <span className="conn-ip">
             {conn.state === 'connected' ? `→ ${conn.ip}` : ''}
           </span>
+          {!isSession && (
+            <button
+              className="gear-btn"
+              title="About nettle"
+              onClick={() => useStore.setState({ aboutOpen: true })}
+            >
+              ⚙
+            </button>
+          )}
         </div>
-        <div className="foot-row">
-          <span className="foot-note">⟳ auto-reconnect · fresh DNS</span>
-          <span className="flex-1" />
-          <span className="foot-uptime">
-            {conn.state === 'connected' ? `up ${fmtUptime(conn.sinceMs, now)}` : ''}
-          </span>
-          <button
-            className="gear-btn"
-            title="About nettle"
-            onClick={() => useStore.setState({ aboutOpen: true })}
-          >
-            ⚙
-          </button>
-        </div>
+        {isSession && activeHost && (
+          <div className="foot-row">
+            <span className="foot-note">
+              {activeHost.username}@{activeHost.hostname}
+              {activeHost.port !== 22 ? `:${activeHost.port}` : ''}
+            </span>
+            <span className="flex-1" />
+            {conn.state === 'connected' && conn.epoch > 1 && (
+              <span className="foot-note">link #{conn.epoch}</span>
+            )}
+          </div>
+        )}
+        {isSession && (
+          <div className="foot-row">
+            <span className={`foot-note${liveTunnels > 0 ? ' acc' : ''}`}>
+              ⚲ {forwards.length === 0 ? 'no tunnels' : tunnelLabel}
+            </span>
+            <span className="flex-1" />
+            {activeTransfers > 0 && (
+              <span className="foot-note">⇅ {activeTransfers}</span>
+            )}
+            <span className="foot-uptime">
+              {conn.state === 'connected' ? `up ${fmtUptime(conn.sinceMs, now)}` : ''}
+            </span>
+            <button
+              className="gear-btn"
+              title="About nettle"
+              onClick={() => useStore.setState({ aboutOpen: true })}
+            >
+              ⚙
+            </button>
+          </div>
+        )}
         {connError && (
           <div className="foot-row">
             <span className="foot-note" style={{ color: 'var(--red)', whiteSpace: 'normal' }}>
