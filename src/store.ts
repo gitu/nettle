@@ -7,55 +7,27 @@ import {
   type ConnectionSet,
   type ConnState,
   type DirListing,
-  type ForwardInfo,
   type ForwardsChanged,
   type HostConfig,
   type HostKeyPrompt,
   type PortsChanged,
-  type RemotePort,
   type Settings,
   type TransferMeta,
   type TransferProgress,
 } from './ipc';
+import {
+  applyConnState,
+  applyForwards,
+  applyPorts,
+  applyTransfer,
+  emptySession,
+  type SessionState,
+  type TransferRow,
+} from './sessionReducer';
 
 export type View = 'files' | 'ports' | 'terminal' | 'dashboard';
 
-export interface TransferRow extends TransferMeta {
-  rate?: number;
-}
-
-/** All state belonging to one host's live (or reconnecting) session. */
-export interface SessionState {
-  hostId: string;
-  conn: ConnState;
-  connError: string | null;
-  ports: RemotePort[];
-  portsUnsupported: boolean;
-  forwards: ForwardInfo[];
-  transfers: Record<string, TransferRow>;
-  remote: DirListing | null;
-  remoteSel: string | null;
-  termClosed: boolean;
-  termGeneration: number;
-  toast: { port: number; process: string | null } | null;
-}
-
-function emptySession(hostId: string): SessionState {
-  return {
-    hostId,
-    conn: { state: 'connecting', hostId },
-    connError: null,
-    ports: [],
-    portsUnsupported: false,
-    forwards: [],
-    transfers: {},
-    remote: null,
-    remoteSel: null,
-    termClosed: false,
-    termGeneration: 0,
-    toast: null,
-  };
-}
+export type { SessionState, TransferRow };
 
 interface NettleState {
   hosts: HostConfig[];
@@ -223,54 +195,20 @@ export async function initStore() {
   await Promise.all([
     listen<ConnState>('connection-state', (e) => {
       const conn = e.payload;
-      const hostId = conn.hostId;
-      if (conn.state === 'disconnected') {
-        set((s) => {
-          const sessions = { ...s.sessions };
-          delete sessions[hostId];
-          const remaining = Object.keys(sessions);
-          const focusedHostId =
-            s.focusedHostId === hostId ? (remaining[0] ?? null) : s.focusedHostId;
-          return { sessions, focusedHostId };
-        });
-        return;
-      }
-      patchSession(set, hostId, (sess) => ({
-        ...sess,
-        conn,
-        connError: conn.state === 'failed' ? conn.error : sess.connError,
-      }));
+      set((s) => applyConnState(s, conn));
       if (conn.state === 'connected') {
-        patchSession(set, hostId, (sess) => ({ ...sess, connError: null }));
-        const cur = get().sessions[hostId];
+        const cur = get().sessions[conn.hostId];
         get()
-          .navigateRemote(hostId, cur?.remote?.path ?? '~')
+          .navigateRemote(conn.hostId, cur?.remote?.path ?? '~')
           .catch(() => {});
       }
     }),
 
-    listen<PortsChanged>('ports-changed', (e) => {
-      const p = e.payload;
-      patchSession(set, p.hostId, (sess) => {
-        let toast = sess.toast;
-        if (!p.isBaseline && p.added.length > 0) {
-          toast = { port: p.added[0].port, process: p.added[0].process };
-        }
-        return { ...sess, ports: p.all, portsUnsupported: p.unsupported, toast };
-      });
-    }),
+    listen<PortsChanged>('ports-changed', (e) => set((s) => applyPorts(s, e.payload))),
 
-    listen<ForwardsChanged>('forwards-changed', (e) => {
-      patchSession(set, e.payload.hostId, (sess) => ({ ...sess, forwards: e.payload.forwards }));
-    }),
+    listen<ForwardsChanged>('forwards-changed', (e) => set((s) => applyForwards(s, e.payload))),
 
-    listen<TransferMeta>('transfer-updated', (e) => {
-      const meta = e.payload;
-      patchSession(set, meta.hostId, (sess) => ({
-        ...sess,
-        transfers: { ...sess.transfers, [meta.id]: { ...sess.transfers[meta.id], ...meta } },
-      }));
-    }),
+    listen<TransferMeta>('transfer-updated', (e) => set((s) => applyTransfer(s, e.payload))),
 
     listen<HostKeyPrompt>('host-key-prompt', (e) => set({ hostKeyPrompt: e.payload })),
     listen<HostKeyPrompt>('host-key-mismatch', (e) => set({ hostKeyMismatch: e.payload })),

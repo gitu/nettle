@@ -56,6 +56,9 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
 #[tauri::command]
 pub async fn delete_host(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
     teardown(&state, host_id).await;
+    state
+        .ui
+        .emit_conn(host_id, ConnState::Disconnected { host_id });
     state.vault.forget(Some(host_id));
     let mut hosts = state.store.load_hosts().await;
     hosts.retain(|h| h.id != host_id);
@@ -175,16 +178,18 @@ async fn teardown(state: &State<'_, AppState>, host_id: Uuid) {
             scanner.abort();
         }
     }
-    // Make sure the UI hears a terminal disconnected state even if the actor
-    // was already gone.
-    state
-        .ui
-        .emit_conn(host_id, ConnState::Disconnected { host_id });
+    // Note: teardown is intentionally silent. It's used internally by
+    // open_session to clear a stale session before reconnecting, so emitting a
+    // `disconnected` here would wipe the freshly-created session on the UI. The
+    // user-facing disconnect commands emit it explicitly.
 }
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
     teardown(&state, host_id).await;
+    state
+        .ui
+        .emit_conn(host_id, ConnState::Disconnected { host_id });
     Ok(())
 }
 
@@ -193,6 +198,9 @@ pub async fn disconnect_all(state: State<'_, AppState>) -> Result<()> {
     let ids: Vec<Uuid> = state.sessions.lock().await.keys().copied().collect();
     for id in ids {
         teardown(&state, id).await;
+        state
+            .ui
+            .emit_conn(id, ConnState::Disconnected { host_id: id });
     }
     Ok(())
 }

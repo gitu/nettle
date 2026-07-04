@@ -129,6 +129,51 @@ async fn wait_epoch(rx: &mut EpochRx, min_id: u64) -> Arc<ConnectionEpoch> {
     .expect("timed out waiting for connection epoch")
 }
 
+/// Wait until the actor publishes `None` (the epoch has been torn down).
+async fn wait_epoch_gone(rx: &mut EpochRx) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if rx.borrow().is_none() {
+                return;
+            }
+            rx.changed().await.expect("session actor died");
+        }
+    })
+    .await
+    .expect("timed out waiting for epoch teardown");
+}
+
+/// Drain connection-state events for a window and assert none is `disconnected`.
+///
+/// This locks in the connect-regression fix: the `SessionActor` must stay
+/// silent on `Disconnect` (only the command layer emits `disconnected`), so a
+/// reconnect — which tears the actor down — can never race a stale disconnect
+/// event over a freshly created session.
+async fn assert_no_disconnected_event(
+    events: &mut mpsc::UnboundedReceiver<(String, serde_json::Value)>,
+    window: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        match tokio::time::timeout(remaining, events.recv()).await {
+            Ok(Some((event, payload))) => {
+                if event == "connection-state" {
+                    assert_ne!(
+                        payload["state"], "disconnected",
+                        "actor must not emit a `disconnected` event on Disconnect"
+                    );
+                }
+            }
+            Ok(None) => return, // stream closed
+            Err(_) => return,   // window elapsed with no further events
+        }
+    }
+}
+
 #[tokio::test]
 async fn connect_exec_disconnect() {
     if !enabled() {
@@ -142,18 +187,10 @@ async fn connect_exec_disconnect() {
     assert_eq!(exit, Some(0));
 
     h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
-    // Expect a disconnected event to land.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let remaining = deadline - tokio::time::Instant::now();
-        let (event, payload) = tokio::time::timeout(remaining, h.events.recv())
-            .await
-            .expect("no disconnected event")
-            .expect("event stream closed");
-        if event == "connection-state" && payload["state"] == "disconnected" {
-            break;
-        }
-    }
+    // The actor tears the epoch down (publishes None) but stays silent — the
+    // command layer, not the actor, owns the `disconnected` event.
+    wait_epoch_gone(&mut h.epoch_rx).await;
+    assert_no_disconnected_event(&mut h.events, Duration::from_millis(1500)).await;
 }
 
 #[tokio::test]
@@ -407,4 +444,43 @@ async fn vault_reuses_password_across_sessions() {
         "exec through vault-auth session: {out}"
     );
     cmd_tx2.send(SessionCmd::Disconnect).unwrap();
+}
+
+#[tokio::test]
+async fn two_concurrent_sessions_stay_independent() {
+    if !enabled() {
+        return;
+    }
+    // Two distinct host identities pointing at the same test sshd, connected at
+    // once — the multi-session model must keep them fully isolated.
+    let mut a = connect().await;
+    let mut b = connect().await;
+    let ea = wait_epoch(&mut a.epoch_rx, 1).await;
+    let eb = wait_epoch(&mut b.epoch_rx, 1).await;
+
+    // Each session executes on its own handle.
+    let (oa, _) = exec_capture(&ea.handle, "echo session-a").await.unwrap();
+    let (ob, _) = exec_capture(&eb.handle, "echo session-b").await.unwrap();
+    assert!(oa.contains("session-a"), "session A output: {oa}");
+    assert!(ob.contains("session-b"), "session B output: {ob}");
+
+    // Disconnecting A must tear A down without touching B.
+    a.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+    wait_epoch_gone(&mut a.epoch_rx).await;
+    assert!(
+        b.epoch_rx.borrow().is_some(),
+        "session B must remain connected after A disconnects"
+    );
+
+    // B is still usable on its original (uncancelled) epoch.
+    assert!(!eb.cancel.is_cancelled(), "B's epoch must not be cancelled");
+    let (ob2, _) = exec_capture(&eb.handle, "echo b-still-alive")
+        .await
+        .unwrap();
+    assert!(
+        ob2.contains("b-still-alive"),
+        "session B still alive: {ob2}"
+    );
+
+    b.cmd_tx.send(SessionCmd::Disconnect).unwrap();
 }

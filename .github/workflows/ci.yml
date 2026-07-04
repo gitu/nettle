@@ -10,7 +10,7 @@ env:
 
 jobs:
   frontend:
-    name: Frontend (tsc + vite build)
+    name: Frontend (vitest + tsc + vite build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Unit tests (vitest)
+        run: pnpm test
       - run: pnpm build
 
   backend:

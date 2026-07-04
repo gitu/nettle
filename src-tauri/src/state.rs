@@ -189,3 +189,56 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod vault_tests {
+    use super::SecretVault;
+    use crate::ssh::auth::SecretCache;
+    use uuid::Uuid;
+
+    fn pw(s: &str) -> SecretCache {
+        SecretCache {
+            password: Some(s.into()),
+            key_passphrase: None,
+        }
+    }
+
+    #[test]
+    fn unknown_host_returns_empty_cache() {
+        let vault = SecretVault::default();
+        assert!(vault.get(Uuid::new_v4()).password.is_none());
+    }
+
+    #[test]
+    fn stored_secret_is_returned_and_hosts_are_isolated() {
+        let vault = SecretVault::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        vault.store(a, &pw("hunter2"));
+        assert_eq!(vault.get(a).password.as_deref(), Some("hunter2"));
+        // Another host must not see host A's password.
+        assert!(vault.get(b).password.is_none());
+    }
+
+    #[test]
+    fn forget_one_host_leaves_others() {
+        let vault = SecretVault::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        vault.store(a, &pw("a-secret"));
+        vault.store(b, &pw("b-secret"));
+        // Invalidation on host edit forgets only that host.
+        vault.forget(Some(a));
+        assert!(vault.get(a).password.is_none());
+        assert_eq!(vault.get(b).password.as_deref(), Some("b-secret"));
+    }
+
+    #[test]
+    fn forget_all_clears_everything() {
+        let vault = SecretVault::default();
+        let a = Uuid::new_v4();
+        vault.store(a, &pw("x"));
+        vault.forget(None);
+        assert!(vault.get(a).password.is_none());
+    }
+}
