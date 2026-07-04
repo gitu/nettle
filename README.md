@@ -26,7 +26,13 @@ day-to-day work against remote dev boxes:
 
 ## Install
 
-Grab the latest build from [Releases](https://github.com/gitu/nettle/releases):
+**macOS (Homebrew):**
+
+```sh
+brew install --cask gitu/tap/nettle
+```
+
+Or grab the latest build from [Releases](https://github.com/gitu/nettle/releases):
 `.dmg` for macOS (Apple Silicon and Intel), `.AppImage` / `.deb` / `.rpm` for
 Linux, `.msi` / `.exe` for Windows.
 
