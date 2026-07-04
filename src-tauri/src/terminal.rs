@@ -65,7 +65,10 @@ pub fn open(
             };
 
             if !first_shell {
-                notice(&on_data, &format!("reconnected → {} · shell reopened", epoch.resolved_ip));
+                notice(
+                    &on_data,
+                    &format!("reconnected → {} · shell reopened", epoch.resolved_ip),
+                );
             }
 
             let channel = match open_shell(&epoch, cols, rows).await {

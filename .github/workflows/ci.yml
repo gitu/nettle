@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: Frontend (tsc + vite build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  backend:
+    name: Backend (fmt, clippy, unit + E2E vs sshd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: rustfmt
+        run: cargo fmt --check
+        working-directory: src-tauri
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+
+      - name: Unit tests
+        run: cargo test --lib
+        working-directory: src-tauri
+
+      - name: Start disposable sshd
+        run: |
+          docker run -d --name nettle-sshd -p 2222:2222 \
+            -e PASSWORD_ACCESS=true -e USER_PASSWORD=nettletest -e USER_NAME=deploy \
+            lscr.io/linuxserver/openssh-server:latest
+          # wait until sshd answers
+          for i in $(seq 1 30); do
+            (echo | timeout 2 nc localhost 2222 | grep -q SSH) && break
+            sleep 2
+          done
+          # the image ships with AllowTcpForwarding no — the tunnel test needs it
+          docker exec nettle-sshd sed -i \
+            's/^AllowTcpForwarding no/AllowTcpForwarding yes/' /config/sshd/sshd_config
+          docker exec nettle-sshd sh -c 'kill -HUP $(cat /config/sshd.pid)'
+          sleep 2
+
+      - name: E2E tests (real sshd)
+        run: NETTLE_E2E=1 cargo test --test e2e -- --nocapture
+        working-directory: src-tauri
+
+      - name: sshd logs on failure
+        if: failure()
+        run: docker logs nettle-sshd || true

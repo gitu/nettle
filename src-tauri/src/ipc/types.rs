@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "state", rename_all_fields = "camelCase")]
+#[serde(
+    rename_all = "camelCase",
+    tag = "state",
+    rename_all_fields = "camelCase"
+)]
 pub enum ConnState {
     Disconnected,
     Connecting {

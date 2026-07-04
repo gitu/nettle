@@ -22,10 +22,7 @@ pub struct ClientHandler {
 impl client::Handler for ClientHandler {
     type Error = russh::Error;
 
-    async fn check_server_key(
-        &mut self,
-        key: &ssh_key::PublicKey,
-    ) -> Result<bool, Self::Error> {
+    async fn check_server_key(&mut self, key: &ssh_key::PublicKey) -> Result<bool, Self::Error> {
         match check_known_hosts_path(&self.hostname, self.port, key, &self.known_hosts_path) {
             Ok(true) => Ok(true),
             Ok(false) => self.prompt_unknown_key(key).await,

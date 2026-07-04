@@ -42,7 +42,8 @@ pub async fn authenticate(
     Err(NettleError::AuthFailed)
 }
 
-async fn connect_agent() -> Option<AgentClient<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send>> {
+async fn connect_agent(
+) -> Option<AgentClient<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send>> {
     #[cfg(unix)]
     {
         AgentClient::connect_env().await.ok()
@@ -102,13 +103,11 @@ async fn try_key_file(
         Err(_) if interactive => {
             // Probably encrypted (or wrong cached passphrase) — ask the user.
             let Some(pass) = ui
-                .ask_secret(
-                    AuthRequest {
-                        kind: "keyPassphrase".into(),
-                        username: host.username.clone(),
-                        host: host.hostname.clone(),
-                    },
-                )
+                .ask_secret(AuthRequest {
+                    kind: "keyPassphrase".into(),
+                    username: host.username.clone(),
+                    host: host.hostname.clone(),
+                })
                 .await
             else {
                 return Ok(None);
@@ -158,13 +157,11 @@ async fn try_password(
         return Ok(false);
     }
     let Some(password) = ui
-        .ask_secret(
-            AuthRequest {
-                kind: "password".into(),
-                username: host.username.clone(),
-                host: host.hostname.clone(),
-            },
-        )
+        .ask_secret(AuthRequest {
+            kind: "password".into(),
+            username: host.username.clone(),
+            host: host.hostname.clone(),
+        })
         .await
     else {
         return Err(NettleError::AuthCancelled);

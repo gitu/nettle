@@ -16,7 +16,11 @@ pub fn parse_ss(output: &str) -> Vec<RemotePort> {
             continue;
         }
         // Some ss builds prepend a Netid column ("tcp LISTEN 0 ...").
-        let local_idx = if fields[0].eq_ignore_ascii_case("tcp") { 4 } else { 3 };
+        let local_idx = if fields[0].eq_ignore_ascii_case("tcp") {
+            4
+        } else {
+            3
+        };
         let Some(local) = fields.get(local_idx) else {
             continue;
         };
@@ -44,10 +48,13 @@ fn parse_ss_process(line: &str) -> (Option<String>, Option<u32>) {
         return (None, None);
     };
     let name = &rest[..name_end];
-    let pid = rest[name_end..]
-        .split("pid=")
-        .nth(1)
-        .and_then(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok());
+    let pid = rest[name_end..].split("pid=").nth(1).and_then(|s| {
+        s.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok()
+    });
     (Some(name.to_string()), pid)
 }
 
@@ -220,9 +227,24 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
     #[test]
     fn dedupe_dual_stack() {
         let ports = vec![
-            RemotePort { port: 8080, bind: "::".into(), process: None, pid: None },
-            RemotePort { port: 8080, bind: "0.0.0.0".into(), process: Some("node".into()), pid: Some(1) },
-            RemotePort { port: 22, bind: "0.0.0.0".into(), process: None, pid: None },
+            RemotePort {
+                port: 8080,
+                bind: "::".into(),
+                process: None,
+                pid: None,
+            },
+            RemotePort {
+                port: 8080,
+                bind: "0.0.0.0".into(),
+                process: Some("node".into()),
+                pid: Some(1),
+            },
+            RemotePort {
+                port: 22,
+                bind: "0.0.0.0".into(),
+                process: None,
+                pid: None,
+            },
         ];
         let deduped = dedupe_by_port(ports);
         assert_eq!(deduped.len(), 2);

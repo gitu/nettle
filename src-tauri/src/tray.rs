@@ -27,7 +27,7 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
-    let tray = builder.build(app)?;
+    builder.build(app)?;
 
     // Reflect the active tunnel count next to the icon (macOS title,
     // tooltip elsewhere).

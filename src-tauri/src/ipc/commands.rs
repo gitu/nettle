@@ -78,11 +78,8 @@ pub async fn connect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
         .collect();
 
     let ui = state.ui.clone();
-    let (cmd_tx, epoch_rx, actor_task) = SessionActor::spawn(
-        ui.clone(),
-        host.clone(),
-        state.store.known_hosts_path(),
-    );
+    let (cmd_tx, epoch_rx, actor_task) =
+        SessionActor::spawn(ui.clone(), host.clone(), state.store.known_hosts_path());
 
     let (ports_live_tx, ports_live_rx) = watch::channel(HashSet::new());
     let forwards = ForwardManager::new(

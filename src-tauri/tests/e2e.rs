@@ -257,7 +257,10 @@ async fn sftp_upload_download_roundtrip() {
     wait_transfer(&transfers, down_id).await;
 
     let roundtripped = std::fs::read(&down_dst).unwrap();
-    assert_eq!(roundtripped, payload, "downloaded bytes differ from uploaded");
+    assert_eq!(
+        roundtripped, payload,
+        "downloaded bytes differ from uploaded"
+    );
 
     let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
     let _ = exec_capture(&epoch.handle, &format!("rm -f {remote_path}")).await;
@@ -298,7 +301,9 @@ async fn forward_tunnel_to_remote_sshd() {
     let mut h = connect().await;
     wait_epoch(&mut h.epoch_rx, 1).await;
 
-    let remote_port: u16 = env_or("NETTLE_E2E_REMOTE_SSH_PORT", "2222").parse().unwrap();
+    let remote_port: u16 = env_or("NETTLE_E2E_REMOTE_SSH_PORT", "2222")
+        .parse()
+        .unwrap();
     let local_port: u16 = 43222;
 
     let (live_tx, live_rx) = watch::channel(HashSet::from([remote_port]));
