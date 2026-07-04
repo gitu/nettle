@@ -55,9 +55,16 @@ jobs:
 
       - name: Start disposable sshd
         run: |
+          # Pull from ghcr (linuxserver mirrors there) to dodge Docker Hub /
+          # lscr.io anonymous rate limits; retry a few times for transient hiccups.
+          IMAGE=ghcr.io/linuxserver/openssh-server:latest
+          for i in 1 2 3 4 5; do
+            docker pull "$IMAGE" && break
+            echo "pull attempt $i failed, retrying in 20s…"; sleep 20
+          done
           docker run -d --name nettle-sshd -p 2222:2222 \
             -e PASSWORD_ACCESS=true -e USER_PASSWORD=nettletest -e USER_NAME=deploy \
-            lscr.io/linuxserver/openssh-server:latest
+            "$IMAGE"
           # wait until sshd answers
           for i in $(seq 1 30); do
             (echo | timeout 2 nc localhost 2222 | grep -q SSH) && break
