@@ -6,15 +6,21 @@ use tauri::{AppHandle, Listener, Manager, Runtime, WindowEvent};
 /// of quitting, so pinned tunnels and the SSH session keep running.
 pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show nettle", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "About nettle", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit nettle", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &about, &sep, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("nettle-tray")
         .menu(&menu)
         .tooltip("nettle")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main(app),
+            "about" => {
+                show_main(app);
+                use tauri::Emitter;
+                let _ = app.emit("open-about", ());
+            }
             "quit" => app.exit(0),
             _ => {}
         })

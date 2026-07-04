@@ -38,6 +38,7 @@ interface NettleState {
   authRequest: AuthRequest | null;
   editHost: HostConfig | 'new' | null;
   connError: string | null;
+  aboutOpen: boolean;
 
   remote: DirListing | null;
   local: DirListing | null;
@@ -73,6 +74,7 @@ export const useStore = create<NettleState>((set, get) => ({
   authRequest: null,
   editHost: null,
   connError: null,
+  aboutOpen: false,
 
   remote: null,
   local: null,
@@ -230,6 +232,7 @@ export async function initStore() {
     listen<HostKeyPrompt>('host-key-mismatch', (e) => set({ hostKeyMismatch: e.payload })),
     listen<AuthRequest>('auth-request', (e) => set({ authRequest: e.payload })),
     listen('term-closed', () => set({ termClosed: true })),
+    listen('open-about', () => set({ aboutOpen: true })),
   ]);
 
   // hydrate

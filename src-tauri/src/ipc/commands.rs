@@ -34,7 +34,18 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
         host.id = Uuid::new_v4();
     }
     match hosts.iter_mut().find(|h| h.id == host.id) {
-        Some(existing) => *existing = host.clone(),
+        Some(existing) => {
+            // Cached runtime secrets belong to a connection identity; if that
+            // changed, they no longer apply — drop them.
+            let identity_changed = existing.hostname != host.hostname
+                || existing.port != host.port
+                || existing.username != host.username
+                || existing.key_path != host.key_path;
+            if identity_changed {
+                state.vault.forget(Some(host.id));
+            }
+            *existing = host.clone();
+        }
         None => hosts.push(host.clone()),
     }
     state.store.save_hosts(hosts).await?;
@@ -43,6 +54,7 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
 
 #[tauri::command]
 pub async fn delete_host(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
+    state.vault.forget(Some(host_id));
     let mut hosts = state.store.load_hosts().await;
     hosts.retain(|h| h.id != host_id);
     state.store.save_hosts(hosts).await

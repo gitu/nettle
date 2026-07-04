@@ -19,6 +19,7 @@ use state::{AppState, UiBridge};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let ui = UiBridge::new(Box::new(app.handle().clone()));

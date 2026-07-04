@@ -1229,3 +1229,53 @@ body {
 .modal-actions .danger-btn:hover {
   opacity: 1;
 }
+
+/* ---------- about ---------- */
+.modal.about {
+  text-align: center;
+}
+.about-mark {
+  font-size: 30px;
+  color: var(--acc);
+  margin: 4px 0 6px;
+}
+.about-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+.about-version {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 4px 0 12px;
+}
+.about-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.55;
+  margin-bottom: 14px;
+}
+.about-links {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 13px;
+}
+.about-license {
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-bottom: 10px;
+}
+.gear-btn {
+  font-size: 13px;
+  color: var(--faint);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0 0 0 4px;
+  flex: none;
+}
+.gear-btn:hover {
+  color: var(--acc);
+}

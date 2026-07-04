@@ -7,6 +7,7 @@ import { PortsView } from './components/PortsView';
 import { TerminalView } from './components/TerminalView';
 import { Toast } from './components/Toast';
 import { AuthModal, HostKeyMismatchModal, HostKeyModal, HostModal } from './components/Modals';
+import { AboutModal } from './components/AboutModal';
 
 export default function App() {
   const view = useStore((s) => s.view);
@@ -39,6 +40,7 @@ export default function App() {
       <HostKeyModal />
       <HostKeyMismatchModal />
       <AuthModal />
+      <AboutModal />
     </div>
   );
 }

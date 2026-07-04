@@ -109,6 +109,13 @@ export function Sidebar() {
           <span className="foot-uptime">
             {conn.state === 'connected' ? `up ${fmtUptime(conn.sinceMs, now)}` : ''}
           </span>
+          <button
+            className="gear-btn"
+            title="About nettle"
+            onClick={() => useStore.setState({ aboutOpen: true })}
+          >
+            ⚙
+          </button>
         </div>
         {connError && (
           <div className="foot-row">
