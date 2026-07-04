@@ -36,6 +36,7 @@ pub fn run() {
             commands::get_connection_state,
             commands::host_key_decision,
             commands::provide_secret,
+            commands::forget_secrets,
             commands::term_open,
             commands::term_write,
             commands::term_resize,

@@ -119,6 +119,39 @@ impl UiBridge {
     }
 }
 
+/// In-memory secrets per host, alive for the app's runtime only. Lets a user
+/// disconnect/reconnect or hop between hosts without re-typing passwords;
+/// nothing ever touches disk, and quitting the app forgets everything.
+#[derive(Default)]
+pub struct SecretVault {
+    inner: StdMutex<std::collections::HashMap<uuid::Uuid, crate::ssh::auth::SecretCache>>,
+}
+
+impl SecretVault {
+    pub fn get(&self, host_id: uuid::Uuid) -> crate::ssh::auth::SecretCache {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(&host_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn store(&self, host_id: uuid::Uuid, cache: &crate::ssh::auth::SecretCache) {
+        self.inner.lock().unwrap().insert(host_id, cache.clone());
+    }
+
+    pub fn forget(&self, host_id: Option<uuid::Uuid>) {
+        let mut inner = self.inner.lock().unwrap();
+        match host_id {
+            Some(id) => {
+                inner.remove(&id);
+            }
+            None => inner.clear(),
+        }
+    }
+}
+
 /// Everything belonging to the currently connected host.
 pub struct ActiveSession {
     pub host: HostConfig,
@@ -136,6 +169,7 @@ pub struct AppState {
     pub store: ConfigStore,
     pub session: Mutex<Option<Arc<ActiveSession>>>,
     pub ui: Arc<UiBridge>,
+    pub vault: Arc<SecretVault>,
 }
 
 impl AppState {
@@ -144,6 +178,7 @@ impl AppState {
             store,
             session: Mutex::new(None),
             ui,
+            vault: Arc::new(SecretVault::default()),
         }
     }
 }

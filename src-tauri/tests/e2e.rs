@@ -32,7 +32,7 @@ use nettle_lib::sftp::browse::SftpBrowser;
 use nettle_lib::sftp::transfers::TransferManager;
 use nettle_lib::ssh::session::{SessionActor, SessionCmd};
 use nettle_lib::ssh::{exec_capture, ConnectionEpoch, EpochRx};
-use nettle_lib::state::{EventSink, UiBridge};
+use nettle_lib::state::{EventSink, SecretVault, UiBridge};
 
 struct TestSink {
     tx: mpsc::UnboundedSender<(String, serde_json::Value)>,
@@ -46,6 +46,7 @@ impl EventSink for TestSink {
 
 struct Harness {
     ui: Arc<UiBridge>,
+    vault: Arc<SecretVault>,
     events: mpsc::UnboundedReceiver<(String, serde_json::Value)>,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     epoch_rx: EpochRx,
@@ -93,11 +94,17 @@ async fn connect() -> Harness {
         }
     });
 
-    let (cmd_tx, epoch_rx, _task) =
-        SessionActor::spawn(ui.clone(), host.clone(), store.known_hosts_path());
+    let vault = Arc::new(SecretVault::default());
+    let (cmd_tx, epoch_rx, _task) = SessionActor::spawn(
+        ui.clone(),
+        host.clone(),
+        store.known_hosts_path(),
+        vault.clone(),
+    );
 
     Harness {
         ui,
+        vault,
         events,
         cmd_tx,
         epoch_rx,
@@ -368,4 +375,35 @@ async fn reconnect_creates_new_epoch_with_cached_auth() {
     assert!(out.contains("reconnected-ok"));
 
     h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
+#[tokio::test]
+async fn vault_reuses_password_across_sessions() {
+    if !enabled() {
+        return;
+    }
+    // First session: prompts answered by the harness responder; on success the
+    // password lands in the vault.
+    let mut h = connect().await;
+    wait_epoch(&mut h.epoch_rx, 1).await;
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Second session: same vault + known_hosts, but NO prompt responder.
+    // It must authenticate purely from the runtime vault.
+    let (tx, _events) = mpsc::unbounded_channel();
+    let ui2 = UiBridge::new(Box::new(TestSink { tx }));
+    let (cmd_tx2, mut epoch_rx2, _task) = SessionActor::spawn(
+        ui2,
+        h.host.clone(),
+        h.store.known_hosts_path(),
+        h.vault.clone(),
+    );
+    let epoch = wait_epoch(&mut epoch_rx2, 1).await;
+    let (out, _) = exec_capture(&epoch.handle, "echo vault-ok").await.unwrap();
+    assert!(
+        out.contains("vault-ok"),
+        "exec through vault-auth session: {out}"
+    );
+    cmd_tx2.send(SessionCmd::Disconnect).unwrap();
 }

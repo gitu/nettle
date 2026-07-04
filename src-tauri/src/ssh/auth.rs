@@ -11,9 +11,10 @@ use crate::ipc::types::AuthRequest;
 use crate::ssh::handler::ClientHandler;
 use crate::state::UiBridge;
 
-/// Secrets entered by the user, kept in memory for the lifetime of the session
-/// so auto-reconnect never re-prompts. Never persisted.
-#[derive(Default)]
+/// Secrets entered by the user, kept in memory only (per host, for the app's
+/// runtime via `SecretVault`) so reconnects and re-connects never re-prompt.
+/// Never persisted.
+#[derive(Default, Clone)]
 pub struct SecretCache {
     pub password: Option<String>,
     pub key_passphrase: Option<String>,

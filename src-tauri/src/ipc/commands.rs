@@ -78,8 +78,12 @@ pub async fn connect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
         .collect();
 
     let ui = state.ui.clone();
-    let (cmd_tx, epoch_rx, actor_task) =
-        SessionActor::spawn(ui.clone(), host.clone(), state.store.known_hosts_path());
+    let (cmd_tx, epoch_rx, actor_task) = SessionActor::spawn(
+        ui.clone(),
+        host.clone(),
+        state.store.known_hosts_path(),
+        state.vault.clone(),
+    );
 
     let (ports_live_tx, ports_live_rx) = watch::channel(HashSet::new());
     let forwards = ForwardManager::new(
@@ -163,6 +167,12 @@ pub fn host_key_decision(state: State<'_, AppState>, accept: bool) {
 #[tauri::command]
 pub fn provide_secret(state: State<'_, AppState>, secret: Option<String>) {
     state.ui.prompts.answer_secret(secret);
+}
+
+/// Drop runtime-cached passwords/passphrases (one host, or all).
+#[tauri::command]
+pub fn forget_secrets(state: State<'_, AppState>, host_id: Option<Uuid>) {
+    state.vault.forget(host_id);
 }
 
 // ---------- terminal ----------

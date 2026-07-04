@@ -14,7 +14,7 @@ use crate::ipc::types::ConnState;
 use crate::ssh::auth::{self, SecretCache};
 use crate::ssh::handler::ClientHandler;
 use crate::ssh::{dns, now_ms, ConnectionEpoch, EpochRx, EpochTx};
-use crate::state::UiBridge;
+use crate::state::{SecretVault, UiBridge};
 
 #[derive(Debug)]
 pub enum SessionCmd {
@@ -30,10 +30,18 @@ impl SessionActor {
         ui: Arc<UiBridge>,
         host: HostConfig,
         known_hosts_path: PathBuf,
+        vault: Arc<SecretVault>,
     ) -> (mpsc::UnboundedSender<SessionCmd>, EpochRx, JoinHandle<()>) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (epoch_tx, epoch_rx) = watch::channel(None);
-        let task = tokio::spawn(Self::run(ui, host, known_hosts_path, cmd_rx, epoch_tx));
+        let task = tokio::spawn(Self::run(
+            ui,
+            host,
+            known_hosts_path,
+            vault,
+            cmd_rx,
+            epoch_tx,
+        ));
         (cmd_tx, epoch_rx, task)
     }
 
@@ -41,10 +49,13 @@ impl SessionActor {
         ui: Arc<UiBridge>,
         host: HostConfig,
         known_hosts_path: PathBuf,
+        vault: Arc<SecretVault>,
         mut cmd_rx: mpsc::UnboundedReceiver<SessionCmd>,
         epoch_tx: EpochTx,
     ) {
-        let mut cache = SecretCache::default();
+        // Seed from the app-runtime vault so a host the user already unlocked
+        // this run connects without prompting.
+        let mut cache = vault.get(host.id);
         let mut epoch_id: u64 = 0;
         let mut ever_connected = false;
         let mut attempt: u32 = 0;
@@ -81,6 +92,7 @@ impl SessionActor {
             .await
             {
                 Ok((handle, ip)) => {
+                    vault.store(host.id, &cache);
                     ever_connected = true;
                     attempt = 0;
                     epoch_id += 1;

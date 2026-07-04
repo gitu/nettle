@@ -47,8 +47,10 @@ on Windows, allow the SmartScreen prompt.
   a hard failure (possible MITM) — there is deliberately no "accept anyway" button.
 - **Auth**: ssh-agent first (`$SSH_AUTH_SOCK`, or the Windows OpenSSH agent
   named pipe), then a configured private key (encrypted keys prompt for the
-  passphrase), then password. Passwords/passphrases are held in memory for the
-  session only — never written to disk — so auto-reconnect doesn't re-prompt.
+  passphrase), then password. Passwords/passphrases are held in an in-memory
+  vault (per host) for the app's runtime — never written to disk — so
+  auto-reconnects, disconnect/reconnect cycles, and host switching don't
+  re-prompt. Quitting the app forgets everything.
 - Host definitions (`hosts.json`) contain no secrets.
 
 ## Architecture
