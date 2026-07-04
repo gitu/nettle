@@ -55,18 +55,30 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # macOS code signing + notarization: the tauri CLI treats even an EMPTY
+      # APPLE_CERTIFICATE env var as "signing configured", so only export the
+      # variables when the secrets actually exist. See README "Signing macOS builds".
+      - name: Enable macOS signing when secrets are configured
+        if: matrix.platform == 'macos-latest'
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+            {
+              echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
+              echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+              echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+              echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+              echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+              echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+            } >> "$GITHUB_ENV"
+            echo "macOS signing enabled"
+          else
+            echo "APPLE_CERTIFICATE secret not set — building unsigned"
+          fi
+
       - name: Build and attach to release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code signing + notarization — no-ops until the secrets exist.
-          # See README "Signing macOS builds".
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'nettle ${{ github.ref_name }}'
