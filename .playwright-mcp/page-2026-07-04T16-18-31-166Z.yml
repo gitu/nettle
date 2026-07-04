@@ -1,0 +1,28 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "close" [ref=e6] [cursor=pointer]
+      - button "minimize" [ref=e7] [cursor=pointer]
+      - button "maximize" [ref=e8] [cursor=pointer]
+    - generic [ref=e9]: ◆ nettle — not connected
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]: HOSTS
+        - button "+" [ref=e14] [cursor=pointer]
+      - generic [ref=e16]: No hosts yet — hit + to add your first server.
+      - generic [ref=e17]:
+        - generic [ref=e20]: offline
+        - generic [ref=e22]: ⟳ auto-reconnect · fresh DNS
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - generic [ref=e27]: —
+        - button "files" [ref=e28] [cursor=pointer]
+        - button "ports 0" [ref=e29] [cursor=pointer]:
+          - text: ports
+          - generic [ref=e30]: "0"
+        - button "terminal" [ref=e31] [cursor=pointer]
+      - generic [ref=e32]:
+        - generic [ref=e33]: ◆
+        - generic [ref=e34]: nettle
+        - generic [ref=e35]: Select a host on the left to connect.

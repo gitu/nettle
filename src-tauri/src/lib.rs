@@ -7,6 +7,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod state;
 pub mod terminal;
+pub mod tray;
 
 use tauri::Manager;
 
@@ -22,8 +23,10 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let ui = UiBridge::new(Box::new(app.handle().clone()));
             app.manage(AppState::new(ConfigStore::new(config_dir), ui));
+            tray::setup(app)?;
             Ok(())
         })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
             commands::save_host,

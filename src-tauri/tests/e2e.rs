@@ -7,6 +7,10 @@
 //! docker run -d --name nettle-sshd -p 2222:2222 \
 //!   -e PASSWORD_ACCESS=true -e USER_PASSWORD=nettletest -e USER_NAME=deploy \
 //!   lscr.io/linuxserver/openssh-server:latest
+//! # the image ships with AllowTcpForwarding no — the tunnel test needs it on:
+//! docker exec nettle-sshd sed -i \
+//!   's/^AllowTcpForwarding no/AllowTcpForwarding yes/' /config/sshd/sshd_config
+//! docker exec nettle-sshd sh -c 'kill -HUP $(cat /config/sshd.pid)'
 //! NETTLE_E2E=1 cargo test --test e2e
 //! ```
 //!

@@ -158,7 +158,7 @@ impl SessionActor {
     async fn try_connect(
         ui: &Arc<UiBridge>,
         host: &HostConfig,
-        known_hosts_path: &PathBuf,
+        known_hosts_path: &std::path::Path,
         config: Arc<client::Config>,
         cache: &mut SecretCache,
         interactive: bool,
@@ -171,7 +171,7 @@ impl SessionActor {
                 ui: ui.clone(),
                 hostname: host.hostname.clone(),
                 port: host.port,
-                known_hosts_path: known_hosts_path.clone(),
+                known_hosts_path: known_hosts_path.to_path_buf(),
                 prompt_allowed: interactive,
                 death_tx: death_tx.clone(),
             };

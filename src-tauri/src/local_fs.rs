@@ -35,7 +35,7 @@ pub async fn list(path: &str) -> Result<DirListing> {
         entries.push(FileEntry {
             name,
             kind: kind.to_string(),
-            size: (!meta.is_dir()).then(|| meta.len()),
+            size: (!meta.is_dir()).then_some(meta.len()),
             mtime,
         });
     }
