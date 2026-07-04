@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+  <!-- macOS menu bar template icon: monochrome, system recolors it -->
+  <rect x="11" y="11" width="22" height="22" rx="3"
+        fill="#000000" transform="rotate(45 22 22)"/>
+</svg>
