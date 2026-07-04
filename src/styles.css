@@ -22,6 +22,16 @@
   --violet: #a78bfa;
 }
 
+/* Nerd Font symbols (powerline glyphs, dev icons) as a fallback so fancy
+   shell prompts render; base text stays IBM Plex Mono. */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url('./assets/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
 * {
   box-sizing: border-box;
 }

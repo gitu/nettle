@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { api, Channel, type TermData } from '../ipc';
 import { useStore } from '../store';
@@ -40,7 +41,11 @@ export function TerminalView() {
     if (!ref.current || !connected) return;
 
     const term = new Terminal({
-      fontFamily: "'IBM Plex Mono', Menlo, monospace",
+      // Symbols Nerd Font Mono fills in powerline/devicon glyphs (PUA) that
+      // Plex Mono lacks; common user-installed Nerd Fonts come first so a
+      // full NF setup wins if present.
+      fontFamily:
+        "'IBM Plex Mono', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, monospace",
       fontSize: 13,
       lineHeight: 1.25,
       cursorBlink: true,
@@ -50,8 +55,19 @@ export function TerminalView() {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = '11';
     term.open(ref.current);
     fit.fit();
+    // Re-measure once web fonts are in, so the cell grid uses Plex Mono
+    // metrics rather than the fallback font it may have measured first.
+    document.fonts?.ready.then(() => {
+      try {
+        fit.fit();
+      } catch {
+        // terminal already disposed
+      }
+    });
     termRef.current = term;
 
     const encoder = new TextEncoder();
