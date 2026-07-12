@@ -2763,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "nettle"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "axum",
  "russh",
