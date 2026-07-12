@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::config::{ConfigStore, HostPort};
+use crate::config::{ConfigStore, PinnedForward};
 use crate::error::{NettleError, Result};
 use crate::ipc::types::ForwardInfo;
 use crate::ssh::EpochRx;
@@ -18,6 +18,7 @@ use crate::state::UiBridge;
 const WAIT_GRACE: Duration = Duration::from_secs(20);
 
 struct Entry {
+    local_port: u16,
     pinned: bool,
     stop: CancellationToken,
 }
@@ -61,6 +62,7 @@ impl ForwardManager {
             .iter()
             .map(|(port, e)| ForwardInfo {
                 port: *port,
+                local_port: e.local_port,
                 pinned: e.pinned,
                 live: live.contains(port),
             })
@@ -85,8 +87,9 @@ impl ForwardManager {
         self.set_with_local(port, port, enabled, pinned).await
     }
 
-    /// Like `set`, but with an explicit local bind port (used by tests where
-    /// the remote port number is already taken on the local machine).
+    /// Like `set`, but with an explicit local bind port — lets the user tunnel
+    /// a remote port to a *different* local port (e.g. remote 8080 →
+    /// localhost:9090). A `local_port` of 0 means "same as the remote port".
     pub async fn set_with_local(
         self: &Arc<Self>,
         port: u16,
@@ -94,29 +97,40 @@ impl ForwardManager {
         enabled: bool,
         pinned: bool,
     ) -> Result<()> {
+        let local_port = if local_port == 0 { port } else { local_port };
+
         if !enabled {
             let entry = self.entries.lock().unwrap().remove(&port);
             if let Some(entry) = entry {
                 entry.stop.cancel();
             }
-            self.persist_pin(port, false).await;
+            self.persist_pin(port, 0, false).await;
             self.broadcast();
             return Ok(());
         }
 
-        let already = {
+        // If the forward already exists on the same local port, just update the
+        // pin flag. If the local port changed, fall through to rebind it.
+        let rebind = {
             let mut entries = self.entries.lock().unwrap();
-            if let Some(entry) = entries.get_mut(&port) {
-                entry.pinned = pinned;
-                true
-            } else {
-                false
+            match entries.get_mut(&port) {
+                Some(entry) if entry.local_port == local_port => {
+                    entry.pinned = pinned;
+                    false
+                }
+                Some(_) => true, // local port changed → tear down and rebind
+                None => true,    // new forward
             }
         };
-        if already {
-            self.persist_pin(port, pinned).await;
+        if !rebind {
+            self.persist_pin(port, local_port, pinned).await;
             self.broadcast();
             return Ok(());
+        }
+
+        // Drop any existing binding for this remote port before re-binding.
+        if let Some(old) = self.entries.lock().unwrap().remove(&port) {
+            old.stop.cancel();
         }
 
         let listener = TcpListener::bind(("127.0.0.1", local_port))
@@ -126,11 +140,12 @@ impl ForwardManager {
         self.entries.lock().unwrap().insert(
             port,
             Entry {
+                local_port,
                 pinned,
                 stop: stop.clone(),
             },
         );
-        self.persist_pin(port, pinned).await;
+        self.persist_pin(port, local_port, pinned).await;
 
         let mgr = self.clone();
         tokio::spawn(async move {
@@ -161,17 +176,19 @@ impl ForwardManager {
         }
     }
 
-    async fn persist_pin(&self, port: u16, pinned: bool) {
-        let key = HostPort {
-            host_id: self.host_id,
-            port,
-        };
+    async fn persist_pin(&self, port: u16, local_port: u16, pinned: bool) {
+        let host_id = self.host_id;
         let _ = self
             .store
             .update_state(move |s| {
-                s.pinned_forwards.retain(|p| *p != key);
+                s.pinned_forwards
+                    .retain(|p| !(p.host_id == host_id && p.port == port));
                 if pinned {
-                    s.pinned_forwards.push(key);
+                    s.pinned_forwards.push(PinnedForward {
+                        host_id,
+                        port,
+                        local_port,
+                    });
                 }
             })
             .await;

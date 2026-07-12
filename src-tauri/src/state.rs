@@ -56,6 +56,12 @@ pub struct UiBridge {
     pub prompts: Prompts,
     /// Last connection state per host, for frontend hydration.
     pub conn_states: StdMutex<std::collections::HashMap<uuid::Uuid, ConnState>>,
+    /// Latest listening-port snapshot per host — lets the tray build a menu
+    /// synchronously without touching the async session map.
+    pub ports: StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::RemotePort>>>,
+    /// Latest forward set per host (same rationale as `ports`).
+    pub forwards:
+        StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::ForwardInfo>>>,
 }
 
 impl UiBridge {
@@ -64,6 +70,8 @@ impl UiBridge {
             sink,
             prompts: Prompts::default(),
             conn_states: StdMutex::new(std::collections::HashMap::new()),
+            ports: StdMutex::new(std::collections::HashMap::new()),
+            forwards: StdMutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -76,6 +84,9 @@ impl UiBridge {
         let mut map = self.conn_states.lock().unwrap();
         if matches!(state, ConnState::Disconnected { .. }) {
             map.remove(&host_id);
+            // A gone session has no ports or forwards to show.
+            self.ports.lock().unwrap().remove(&host_id);
+            self.forwards.lock().unwrap().remove(&host_id);
         } else {
             map.insert(host_id, state.clone());
         }
@@ -83,11 +94,31 @@ impl UiBridge {
         self.emit("connection-state", &state);
     }
 
+    /// Drop a host's cached UI state (connection/ports/forwards) *without*
+    /// emitting anything. Used by internal `teardown()` so that a session torn
+    /// down silently (e.g. when `keep_connections` is off and connecting to a
+    /// different host) doesn't linger in `conn_states` and reappear as a
+    /// phantom "connected" session when the frontend re-hydrates via
+    /// `list_sessions()` after a reload.
+    pub fn clear_conn(&self, host_id: uuid::Uuid) {
+        self.conn_states.lock().unwrap().remove(&host_id);
+        self.ports.lock().unwrap().remove(&host_id);
+        self.forwards.lock().unwrap().remove(&host_id);
+    }
+
     pub fn emit_ports(&self, payload: &PortsChanged) {
+        self.ports
+            .lock()
+            .unwrap()
+            .insert(payload.host_id, payload.all.clone());
         self.emit("ports-changed", payload);
     }
 
     pub fn emit_forwards(&self, payload: &crate::ipc::types::ForwardsChanged) {
+        self.forwards
+            .lock()
+            .unwrap()
+            .insert(payload.host_id, payload.forwards.clone());
         self.emit("forwards-changed", payload);
     }
 
@@ -97,6 +128,11 @@ impl UiBridge {
 
     pub fn emit_term_closed(&self, host_id: uuid::Uuid) {
         self.emit("term-closed", &serde_json::json!({ "hostId": host_id }));
+    }
+
+    /// Notify listeners (the tray) that the host list changed.
+    pub fn notify_hosts_changed(&self) {
+        self.emit("hosts-changed", &serde_json::json!({}));
     }
 
     pub fn emit_host_key_mismatch(&self, payload: &HostKeyPrompt) {
@@ -170,22 +206,122 @@ pub struct ActiveSession {
     pub scanner_task: StdMutex<Option<JoinHandle<()>>>,
 }
 
+pub type Sessions = std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>;
+
+/// Shared application state. Every field is cheap to clone (Arc / Clone), so the
+/// whole thing can be handed to the embedded web-control server, which drives
+/// the same session machinery as the Tauri commands.
+#[derive(Clone)]
 pub struct AppState {
     pub store: ConfigStore,
     /// One live session per connected host. Multiple hosts stay connected at
     /// once when the "keep connections" setting is on.
-    pub sessions: Mutex<std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>>,
+    pub sessions: Arc<Mutex<Sessions>>,
     pub ui: Arc<UiBridge>,
     pub vault: Arc<SecretVault>,
+    /// Handle to the running web-control server, if any.
+    pub web: Arc<StdMutex<Option<crate::web::WebHandle>>>,
 }
 
 impl AppState {
     pub fn new(store: ConfigStore, ui: Arc<UiBridge>) -> Self {
         Self {
             store,
-            sessions: Mutex::new(std::collections::HashMap::new()),
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             ui,
             vault: Arc::new(SecretVault::default()),
+            web: Arc::new(StdMutex::new(None)),
         }
+    }
+}
+
+#[cfg(test)]
+mod vault_tests {
+    use super::{EventSink, SecretVault, UiBridge};
+    use crate::ipc::types::ConnState;
+    use crate::ssh::auth::SecretCache;
+    use uuid::Uuid;
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit_json(&self, _event: &str, _payload: serde_json::Value) {}
+    }
+
+    fn connected(host_id: Uuid) -> ConnState {
+        ConnState::Connected {
+            host_id,
+            ip: "127.0.0.1".into(),
+            since_ms: 0,
+            epoch: 1,
+        }
+    }
+
+    // Regression: a session torn down internally (keep_connections=off, or the
+    // reconnect path) must not linger in conn_states, or list_sessions() would
+    // hydrate it as a phantom "connected" session after a window reload.
+    #[test]
+    fn clear_conn_drops_cached_state_without_emitting() {
+        let ui = UiBridge::new(Box::new(NullSink));
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        ui.emit_conn(a, connected(a));
+        ui.emit_conn(b, connected(b));
+        assert!(ui.conn_states.lock().unwrap().contains_key(&a));
+
+        ui.clear_conn(a);
+        assert!(
+            !ui.conn_states.lock().unwrap().contains_key(&a),
+            "cleared host must not remain in conn_states"
+        );
+        assert!(
+            ui.conn_states.lock().unwrap().contains_key(&b),
+            "clearing one host must not touch others"
+        );
+    }
+
+    fn pw(s: &str) -> SecretCache {
+        SecretCache {
+            password: Some(s.into()),
+            key_passphrase: None,
+        }
+    }
+
+    #[test]
+    fn unknown_host_returns_empty_cache() {
+        let vault = SecretVault::default();
+        assert!(vault.get(Uuid::new_v4()).password.is_none());
+    }
+
+    #[test]
+    fn stored_secret_is_returned_and_hosts_are_isolated() {
+        let vault = SecretVault::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        vault.store(a, &pw("hunter2"));
+        assert_eq!(vault.get(a).password.as_deref(), Some("hunter2"));
+        // Another host must not see host A's password.
+        assert!(vault.get(b).password.is_none());
+    }
+
+    #[test]
+    fn forget_one_host_leaves_others() {
+        let vault = SecretVault::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        vault.store(a, &pw("a-secret"));
+        vault.store(b, &pw("b-secret"));
+        // Invalidation on host edit forgets only that host.
+        vault.forget(Some(a));
+        assert!(vault.get(a).password.is_none());
+        assert_eq!(vault.get(b).password.as_deref(), Some("b-secret"));
+    }
+
+    #[test]
+    fn forget_all_clears_everything() {
+        let vault = SecretVault::default();
+        let a = Uuid::new_v4();
+        vault.store(a, &pw("x"));
+        vault.forget(None);
+        assert!(vault.get(a).password.is_none());
     }
 }

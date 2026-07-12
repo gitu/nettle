@@ -24,6 +24,8 @@ pub enum NettleError {
     #[error("not connected")]
     NotConnected,
     #[error("{0}")]
+    Permission(String),
+    #[error("{0}")]
     Msg(String),
 }
 
@@ -40,6 +42,7 @@ impl NettleError {
             NettleError::Dns(_) => "dns",
             NettleError::Timeout => "timeout",
             NettleError::NotConnected => "not_connected",
+            NettleError::Permission(_) => "permission",
             NettleError::Msg(_) => "error",
         }
     }

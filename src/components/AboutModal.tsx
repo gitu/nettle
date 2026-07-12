@@ -58,6 +58,12 @@ export function AboutModal() {
             Keep connections open when switching hosts
           </span>
         </label>
+        <button
+          className="toast-secondary about-remote-btn"
+          onClick={() => useStore.setState({ aboutOpen: false, webOpen: true })}
+        >
+          Remote control…
+        </button>
         <div className="about-license">MIT License · © 2026 gitu</div>
         <div className="modal-actions" style={{ justifyContent: 'center' }}>
           <button className="toast-ghost" onClick={close}>

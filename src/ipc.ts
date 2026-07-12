@@ -31,6 +31,13 @@ export interface Settings {
   keepConnections: boolean;
 }
 
+export interface WebConfig {
+  enabled: boolean;
+  port: number;
+  lan: boolean;
+  token: string;
+}
+
 export interface ConnectionSet {
   id: string;
   name: string;
@@ -78,6 +85,7 @@ export interface ForwardsChanged {
 
 export interface ForwardInfo {
   port: number;
+  localPort: number;
   pinned: boolean;
   live: boolean;
 }
@@ -138,6 +146,11 @@ export const api = {
   getSettings: () => invoke<Settings>('get_settings'),
   setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),
 
+  getWebConfig: () => invoke<WebConfig>('get_web_config'),
+  setWebConfig: (config: WebConfig) => invoke<WebConfig>('set_web_config', { config }),
+  webRegenerateToken: () => invoke<WebConfig>('web_regenerate_token'),
+  webLink: () => invoke<string>('web_link'),
+
   listSets: () => invoke<ConnectionSet[]>('list_sets'),
   saveSet: (set: ConnectionSet) => invoke<ConnectionSet>('save_set', { set }),
   deleteSet: (setId: string) => invoke<void>('delete_set', { setId }),
@@ -168,9 +181,16 @@ export const api = {
   transferClearFinished: (hostId: string) =>
     invoke<void>('transfer_clear_finished', { hostId }),
 
-  forwardSet: (hostId: string, port: number, enabled: boolean, pinned: boolean) =>
-    invoke<void>('forward_set', { hostId, port, enabled, pinned }),
+  forwardSet: (
+    hostId: string,
+    port: number,
+    enabled: boolean,
+    pinned: boolean,
+    localPort?: number,
+  ) => invoke<void>('forward_set', { hostId, port, enabled, pinned, localPort: localPort ?? null }),
   forwardList: (hostId: string) => invoke<ForwardInfo[]>('forward_list', { hostId }),
+  probePortScheme: (hostId: string, port: number) =>
+    invoke<'http' | 'https'>('probe_port_scheme', { hostId, port }),
   allForwards: () => invoke<HostForward[]>('all_forwards'),
   portIgnore: (hostId: string, port: number) => invoke<void>('port_ignore', { hostId, port }),
 

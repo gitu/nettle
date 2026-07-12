@@ -69,3 +69,77 @@ impl ConfigStore {
         self.write_json(self.state_path(), &state).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::ConnectionSet;
+    use uuid::Uuid;
+
+    fn tmp_store() -> (ConfigStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        (ConfigStore::new(dir.path().to_path_buf()), dir)
+    }
+
+    #[tokio::test]
+    async fn missing_files_yield_defaults() {
+        let (store, _dir) = tmp_store();
+        assert!(store.load_hosts().await.is_empty());
+        let state = store.load_state().await;
+        assert!(state.settings.keep_connections);
+        assert!(state.sets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hosts_persist_across_loads() {
+        let (store, _dir) = tmp_store();
+        let host = HostConfig {
+            id: Uuid::new_v4(),
+            name: "web".into(),
+            hostname: "example.com".into(),
+            port: 22,
+            username: "deploy".into(),
+            key_path: None,
+        };
+        store.save_hosts(vec![host.clone()]).await.unwrap();
+        let loaded = store.load_hosts().await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, host.id);
+        assert_eq!(loaded[0].hostname, "example.com");
+    }
+
+    #[tokio::test]
+    async fn update_state_is_read_modify_write() {
+        let (store, _dir) = tmp_store();
+        let host = Uuid::new_v4();
+        store
+            .update_state(|s| {
+                s.settings.keep_connections = false;
+                s.sets.push(ConnectionSet {
+                    id: Uuid::new_v4(),
+                    name: "dev".into(),
+                    host_ids: vec![host],
+                });
+            })
+            .await
+            .unwrap();
+        // A second update must see the first one's writes.
+        store
+            .update_state(|s| {
+                s.pinned_forwards.push(crate::config::model::PinnedForward {
+                    host_id: host,
+                    port: 3000,
+                    local_port: 0,
+                });
+            })
+            .await
+            .unwrap();
+
+        let state = store.load_state().await;
+        assert!(!state.settings.keep_connections);
+        assert_eq!(state.sets.len(), 1);
+        assert_eq!(state.sets[0].name, "dev");
+        assert_eq!(state.pinned_forwards.len(), 1);
+        assert_eq!(state.pinned_forwards[0].port, 3000);
+    }
+}

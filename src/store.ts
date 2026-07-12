@@ -7,55 +7,27 @@ import {
   type ConnectionSet,
   type ConnState,
   type DirListing,
-  type ForwardInfo,
   type ForwardsChanged,
   type HostConfig,
   type HostKeyPrompt,
   type PortsChanged,
-  type RemotePort,
   type Settings,
   type TransferMeta,
   type TransferProgress,
 } from './ipc';
+import {
+  applyConnState,
+  applyForwards,
+  applyPorts,
+  applyTransfer,
+  emptySession,
+  type SessionState,
+  type TransferRow,
+} from './sessionReducer';
 
 export type View = 'files' | 'ports' | 'terminal' | 'dashboard';
 
-export interface TransferRow extends TransferMeta {
-  rate?: number;
-}
-
-/** All state belonging to one host's live (or reconnecting) session. */
-export interface SessionState {
-  hostId: string;
-  conn: ConnState;
-  connError: string | null;
-  ports: RemotePort[];
-  portsUnsupported: boolean;
-  forwards: ForwardInfo[];
-  transfers: Record<string, TransferRow>;
-  remote: DirListing | null;
-  remoteSel: string | null;
-  termClosed: boolean;
-  termGeneration: number;
-  toast: { port: number; process: string | null } | null;
-}
-
-function emptySession(hostId: string): SessionState {
-  return {
-    hostId,
-    conn: { state: 'connecting', hostId },
-    connError: null,
-    ports: [],
-    portsUnsupported: false,
-    forwards: [],
-    transfers: {},
-    remote: null,
-    remoteSel: null,
-    termClosed: false,
-    termGeneration: 0,
-    toast: null,
-  };
-}
+export type { SessionState, TransferRow };
 
 interface NettleState {
   hosts: HostConfig[];
@@ -69,6 +41,7 @@ interface NettleState {
   // shared local file pane
   local: DirListing | null;
   localSel: string | null;
+  localError: string | null;
 
   // modals / prompts (global, one at a time)
   hostKeyPrompt: HostKeyPrompt | null;
@@ -77,8 +50,10 @@ interface NettleState {
   editHost: HostConfig | 'new' | null;
   editSet: ConnectionSet | 'new' | null;
   aboutOpen: boolean;
+  webOpen: boolean;
 
   setView: (view: View) => void;
+  showDashboard: () => void;
   refreshHosts: () => Promise<void>;
   refreshSets: () => Promise<void>;
   connect: (hostId: string) => Promise<void>;
@@ -101,6 +76,7 @@ export const useStore = create<NettleState>((set, get) => ({
 
   local: null,
   localSel: null,
+  localError: null,
 
   hostKeyPrompt: null,
   hostKeyMismatch: null,
@@ -108,8 +84,12 @@ export const useStore = create<NettleState>((set, get) => ({
   editHost: null,
   editSet: null,
   aboutOpen: false,
+  webOpen: false,
 
   setView: (view) => set({ view }),
+  // The global dashboard is host-independent: clearing focus makes the
+  // DashboardView aggregate every session instead of a single host.
+  showDashboard: () => set({ view: 'dashboard', focusedHostId: null }),
 
   refreshHosts: async () => set({ hosts: await api.listHosts() }),
   refreshSets: async () => set({ sets: await api.listSets() }),
@@ -119,7 +99,7 @@ export const useStore = create<NettleState>((set, get) => ({
     set((s) => {
       const sessions = s.settings.keepConnections ? { ...s.sessions } : {};
       sessions[hostId] = emptySession(hostId);
-      return { sessions, focusedHostId: hostId, view: s.view === 'dashboard' ? 'ports' : s.view };
+      return { sessions, focusedHostId: hostId, view: 'dashboard' };
     });
     try {
       await api.connect(hostId);
@@ -129,7 +109,7 @@ export const useStore = create<NettleState>((set, get) => ({
     }
   },
 
-  focusHost: (hostId) => set({ focusedHostId: hostId, view: get().view === 'dashboard' ? 'ports' : get().view }),
+  focusHost: (hostId) => set({ focusedHostId: hostId, view: 'dashboard' }),
 
   disconnect: async (hostId) => {
     await api.disconnect(hostId);
@@ -149,7 +129,13 @@ export const useStore = create<NettleState>((set, get) => ({
   },
 
   navigateLocal: async (path) => {
-    set({ local: await api.localList(path), localSel: null });
+    try {
+      set({ local: await api.localList(path), localSel: null, localError: null });
+    } catch (e: unknown) {
+      // Surface the failure (e.g. macOS blocking a TCC-protected folder like
+      // Downloads) instead of silently leaving the pane unchanged.
+      set({ localError: (e as { message?: string })?.message ?? String(e) });
+    }
   },
 
   startTransfer: async (hostId, direction, name) => {
@@ -223,54 +209,20 @@ export async function initStore() {
   await Promise.all([
     listen<ConnState>('connection-state', (e) => {
       const conn = e.payload;
-      const hostId = conn.hostId;
-      if (conn.state === 'disconnected') {
-        set((s) => {
-          const sessions = { ...s.sessions };
-          delete sessions[hostId];
-          const remaining = Object.keys(sessions);
-          const focusedHostId =
-            s.focusedHostId === hostId ? (remaining[0] ?? null) : s.focusedHostId;
-          return { sessions, focusedHostId };
-        });
-        return;
-      }
-      patchSession(set, hostId, (sess) => ({
-        ...sess,
-        conn,
-        connError: conn.state === 'failed' ? conn.error : sess.connError,
-      }));
+      set((s) => applyConnState(s, conn));
       if (conn.state === 'connected') {
-        patchSession(set, hostId, (sess) => ({ ...sess, connError: null }));
-        const cur = get().sessions[hostId];
+        const cur = get().sessions[conn.hostId];
         get()
-          .navigateRemote(hostId, cur?.remote?.path ?? '~')
+          .navigateRemote(conn.hostId, cur?.remote?.path ?? '~')
           .catch(() => {});
       }
     }),
 
-    listen<PortsChanged>('ports-changed', (e) => {
-      const p = e.payload;
-      patchSession(set, p.hostId, (sess) => {
-        let toast = sess.toast;
-        if (!p.isBaseline && p.added.length > 0) {
-          toast = { port: p.added[0].port, process: p.added[0].process };
-        }
-        return { ...sess, ports: p.all, portsUnsupported: p.unsupported, toast };
-      });
-    }),
+    listen<PortsChanged>('ports-changed', (e) => set((s) => applyPorts(s, e.payload))),
 
-    listen<ForwardsChanged>('forwards-changed', (e) => {
-      patchSession(set, e.payload.hostId, (sess) => ({ ...sess, forwards: e.payload.forwards }));
-    }),
+    listen<ForwardsChanged>('forwards-changed', (e) => set((s) => applyForwards(s, e.payload))),
 
-    listen<TransferMeta>('transfer-updated', (e) => {
-      const meta = e.payload;
-      patchSession(set, meta.hostId, (sess) => ({
-        ...sess,
-        transfers: { ...sess.transfers, [meta.id]: { ...sess.transfers[meta.id], ...meta } },
-      }));
-    }),
+    listen<TransferMeta>('transfer-updated', (e) => set((s) => applyTransfer(s, e.payload))),
 
     listen<HostKeyPrompt>('host-key-prompt', (e) => set({ hostKeyPrompt: e.payload })),
     listen<HostKeyPrompt>('host-key-mismatch', (e) => set({ hostKeyMismatch: e.payload })),
@@ -279,6 +231,11 @@ export async function initStore() {
       patchSession(set, e.payload.hostId, (s) => ({ ...s, termClosed: true })),
     ),
     listen('open-about', () => set({ aboutOpen: true })),
+    // Tray "Show" on a specific host focuses it in the window.
+    listen<string>('tray-focus-host', (e) => {
+      const hostId = e.payload;
+      if (get().sessions[hostId]) get().focusHost(hostId);
+    }),
   ]);
 
   // hydrate

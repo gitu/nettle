@@ -9,6 +9,7 @@ import { DashboardView } from './components/DashboardView';
 import { Toast } from './components/Toast';
 import { AuthModal, HostKeyMismatchModal, HostKeyModal, HostModal } from './components/Modals';
 import { AboutModal } from './components/AboutModal';
+import { RemoteControlModal } from './components/RemoteControlModal';
 import { SetModal } from './components/SetModal';
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
       <HostKeyMismatchModal />
       <AuthModal />
       <AboutModal />
+      <RemoteControlModal />
     </div>
   );
 }

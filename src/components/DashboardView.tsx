@@ -13,11 +13,16 @@ interface Row {
 export function DashboardView() {
   const hosts = useStore((s) => s.hosts);
   const sessions = useStore((s) => s.sessions);
+  const focusedHostId = useStore((s) => s.focusedHostId);
   const focusHost = useStore((s) => s.focusHost);
   const setView = useStore((s) => s.setView);
 
-  // Aggregate every forward across every live session, grouped by host.
+  // Single-host mode when a host is focused (the per-host dashboard tab);
+  // otherwise aggregate every session (the independent global dashboard).
+  const scoped = focusedHostId != null && sessions[focusedHostId] != null;
+
   const groups = Object.values(sessions)
+    .filter((sess) => !scoped || sess.hostId === focusedHostId)
     .map((sess) => {
       const host = hosts.find((h) => h.id === sess.hostId);
       const connected = sess.conn.state === 'connected';
@@ -35,21 +40,27 @@ export function DashboardView() {
 
   const totalTunnels = groups.reduce((n, g) => n + g.rows.length, 0);
   const totalActive = groups.reduce((n, g) => n + g.rows.filter((r) => r.live).length, 0);
+  const scopedName = scoped ? (groups[0]?.hostName ?? '') : '';
 
   return (
     <div className="view">
       <div className="ports-head">
         <div className="flex-1">
-          <div className="ports-title">Tunnels dashboard</div>
+          <div className="ports-title">{scoped ? `${scopedName} · tunnels` : 'Tunnels dashboard'}</div>
           <div className="ports-desc">
-            Every forward across all connected hosts. {totalTunnels} tunnel
-            {totalTunnels === 1 ? '' : 's'} · {totalActive} active.
+            {scoped
+              ? `Every forward on this host. ${totalTunnels} tunnel${totalTunnels === 1 ? '' : 's'} · ${totalActive} active.`
+              : `Every forward across all connected hosts. ${totalTunnels} tunnel${totalTunnels === 1 ? '' : 's'} · ${totalActive} active.`}
           </div>
         </div>
       </div>
       <div className="ports-body">
         {groups.length === 0 && (
-          <div className="pane-msg">No active sessions. Connect a host to see its tunnels here.</div>
+          <div className="pane-msg">
+            {scoped
+              ? "No tunnels on this host yet — open one from the ports tab."
+              : 'No active sessions. Connect a host to see its tunnels here.'}
+          </div>
         )}
         {groups.map((g) => (
           <div key={g.hostId} className="dash-group">

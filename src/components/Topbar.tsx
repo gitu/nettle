@@ -9,7 +9,6 @@ export function Topbar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const disconnect = useStore((s) => s.disconnect);
-  const activeSessions = useStore((s) => Object.keys(s.sessions).length);
 
   const host = hosts.find((h) => h.id === focusedHostId);
   const conn = session?.conn;
@@ -23,19 +22,21 @@ export function Topbar() {
         ? 'reconnecting'
         : 'off';
 
+  const dashboardTab = (
+    <button
+      className={`tab dash${view === 'dashboard' ? ' active' : ''}`}
+      title="This host's tunnels"
+      onClick={() => setView('dashboard')}
+    >
+      ⚲ dashboard
+      {forwards.length > 0 && <span className="tab-badge">{forwards.length}</span>}
+    </button>
+  );
+
   return (
     <div className="topbar">
-      <button
-        className={`tab dash${view === 'dashboard' ? ' active' : ''}`}
-        title="Tunnels dashboard"
-        onClick={() => setView('dashboard')}
-      >
-        ⚲ dashboard
-        {activeSessions > 0 && <span className="tab-badge">{activeSessions}</span>}
-      </button>
-      {session && host && (
+      {session && host ? (
         <>
-          <span className="topbar-divider" />
           <div className="topbar-session">
             <span className={`conn-dot ${dotClass}`} />
             <span className="session-name">{host.name}</span>
@@ -44,6 +45,8 @@ export function Topbar() {
             </span>
             {reconnecting && <span className="reconn-chip">reconnecting · resolving DNS…</span>}
           </div>
+          <span className="topbar-divider" />
+          {dashboardTab}
           {SESSION_TABS.map((t) => (
             <button
               key={t}
@@ -60,8 +63,15 @@ export function Topbar() {
             disconnect
           </button>
         </>
+      ) : (
+        <>
+          <div className="topbar-session">
+            <span className="session-name">⚲ Dashboard</span>
+            <span className="session-addr">all hosts</span>
+          </div>
+          <div className="flex-1" />
+        </>
       )}
-      {!session && <div className="flex-1" />}
     </div>
   );
 }

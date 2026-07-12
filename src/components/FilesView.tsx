@@ -1,11 +1,14 @@
+import { useState } from 'react';
 import { useStore, type TransferRow } from '../store';
 import { api, type DirListing, type FileEntry } from '../ipc';
+import { applyFileView, TIME_FILTERS, type FileViewOpts } from '../fileView';
 import { crumbsOf, fileMeta, fmtAgo, fmtBytes } from '../util';
 
 function Pane({
   side,
   listing,
   selected,
+  error,
   onNavigate,
   onSelect,
   onAction,
@@ -13,13 +16,29 @@ function Pane({
   side: 'remote' | 'local';
   listing: DirListing | null;
   selected: string | null;
+  error?: string | null;
   onNavigate: (path: string) => void;
   onSelect: (name: string | null) => void;
   onAction: (name: string) => void;
 }) {
+  // Search / sort / filter state is per-pane, so local and remote are
+  // independent.
+  const [view, setView] = useState<Omit<FileViewOpts, 'nowSec'>>({
+    query: '',
+    sortBy: 'name',
+    groupDirs: true,
+    sinceHours: null,
+  });
+
   const sep = side === 'local' && listing?.path.includes('\\') ? '\\' : '/';
   const crumbs = listing ? crumbsOf(listing.path, sep) : [];
   const actionGlyph = side === 'remote' ? '⤓' : '⤒';
+  const entries = listing
+    ? applyFileView(listing.entries, { ...view, nowSec: Date.now() / 1000 })
+    : [];
+  // The directory has content, but the current search/filter hid all of it.
+  const filteredEmpty = !error && !!listing && listing.entries.length > 0 && entries.length === 0;
+  const patch = (p: Partial<Omit<FileViewOpts, 'nowSec'>>) => setView((v) => ({ ...v, ...p }));
 
   return (
     <div className={`pane ${side}`}>
@@ -37,10 +56,18 @@ function Pane({
           ))}
         </div>
       </div>
+      <FileControls opts={view} onChange={patch} />
       <div className="pane-body">
-        {!listing && <div className="pane-msg">Not connected.</div>}
-        {listing?.entries.length === 0 && <div className="pane-msg">Empty directory.</div>}
-        {listing?.entries.map((f: FileEntry) => {
+        {error && <div className="pane-msg error">{error}</div>}
+        {!error && !listing && (
+          <div className="pane-msg">{side === 'remote' ? 'Not connected.' : 'No folder open.'}</div>
+        )}
+        {!error && listing?.entries.length === 0 && (
+          <div className="pane-msg">Empty directory.</div>
+        )}
+        {filteredEmpty && <div className="pane-msg">No files match the current filter.</div>}
+        {listing &&
+          entries.map((f: FileEntry) => {
           const isDir = f.kind === 'dir';
           const meta = fileMeta(f.name);
           return (
@@ -187,12 +214,74 @@ function TransferQueue({ hostId }: { hostId: string }) {
   );
 }
 
+function FileControls({
+  opts,
+  onChange,
+}: {
+  opts: Omit<FileViewOpts, 'nowSec'>;
+  onChange: (patch: Partial<Omit<FileViewOpts, 'nowSec'>>) => void;
+}) {
+  return (
+    <div className="file-controls">
+      <input
+        className="file-search"
+        placeholder="search files…"
+        value={opts.query}
+        onChange={(e) => onChange({ query: e.target.value })}
+      />
+      {opts.query && (
+        <button className="file-clear" title="clear" onClick={() => onChange({ query: '' })}>
+          ✕
+        </button>
+      )}
+      <span className="fc-sep" />
+      <span className="fc-label">sort</span>
+      <div className="fc-group">
+        <button
+          className={`fc-chip${opts.sortBy === 'name' ? ' on' : ''}`}
+          onClick={() => onChange({ sortBy: 'name' })}
+        >
+          name
+        </button>
+        <button
+          className={`fc-chip${opts.sortBy === 'modified' ? ' on' : ''}`}
+          onClick={() => onChange({ sortBy: 'modified' })}
+        >
+          modified
+        </button>
+      </div>
+      <span className="fc-sep" />
+      <span className="fc-label">modified</span>
+      <div className="fc-group">
+        {TIME_FILTERS.map((t) => (
+          <button
+            key={t.label}
+            className={`fc-chip${opts.sinceHours === t.hours ? ' on' : ''}`}
+            onClick={() => onChange({ sinceHours: t.hours })}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <span className="fc-sep" />
+      <button
+        className={`fc-chip${opts.groupDirs ? ' on' : ''}`}
+        title="keep folders sorted before files"
+        onClick={() => onChange({ groupDirs: !opts.groupDirs })}
+      >
+        group folders
+      </button>
+    </div>
+  );
+}
+
 export function FilesView() {
   const hostId = useStore((s) => s.focusedHostId);
   const remote = useStore((s) => (hostId ? (s.sessions[hostId]?.remote ?? null) : null));
   const remoteSel = useStore((s) => (hostId ? (s.sessions[hostId]?.remoteSel ?? null) : null));
   const local = useStore((s) => s.local);
   const localSel = useStore((s) => s.localSel);
+  const localError = useStore((s) => s.localError);
   const navigateRemote = useStore((s) => s.navigateRemote);
   const navigateLocal = useStore((s) => s.navigateLocal);
   const startTransfer = useStore((s) => s.startTransfer);
@@ -202,6 +291,15 @@ export function FilesView() {
   return (
     <div className="view">
       <div className="panes">
+        <Pane
+          side="local"
+          listing={local}
+          selected={localSel}
+          error={localError}
+          onNavigate={(p) => navigateLocal(p).catch(() => {})}
+          onSelect={(name) => useStore.setState({ localSel: name })}
+          onAction={(name) => startTransfer(hostId, 'up', name)}
+        />
         <Pane
           side="remote"
           listing={remote}
@@ -215,14 +313,6 @@ export function FilesView() {
             })
           }
           onAction={(name) => startTransfer(hostId, 'down', name)}
-        />
-        <Pane
-          side="local"
-          listing={local}
-          selected={localSel}
-          onNavigate={(p) => navigateLocal(p).catch(() => {})}
-          onSelect={(name) => useStore.setState({ localSel: name })}
-          onAction={(name) => startTransfer(hostId, 'up', name)}
         />
       </div>
       <TransferQueue hostId={hostId} />

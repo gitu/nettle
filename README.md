@@ -60,6 +60,26 @@ on Windows, allow the SmartScreen prompt.
   re-prompt. Quitting the app forgets everything.
 - Host definitions (`hosts.json`) contain no secrets.
 
+## Remote control (optional)
+
+nettle can run a small local HTTP server so you can browse and move files on your
+connected hosts — and connect/disconnect or toggle port forwards — from your
+phone or another browser. Open **About → Remote control…** to configure it.
+
+- **Off by default.** Enabling it mints a random 128-bit token that is embedded
+  in a link the app hands you (the token rides in the URL *fragment*, so it is
+  never sent to the server in the clear or written to its logs). Opening the link
+  loads a small, self-contained web panel that authenticates with that token.
+- **Localhost by default.** The server binds to `127.0.0.1:8760` (the port is
+  configurable in the dialog); the link only works on this machine. Flip
+  **"reachable from the local network"** to bind `0.0.0.0` and get a link with
+  your LAN IP for use from another device — at which point anyone on your network
+  who has the link can reach your hosts, so keep it private.
+- **The token is the only credential.** Every `/api/*` call requires it (as a
+  `Authorization: Bearer` header or `?t=` query param); regenerate it any time to
+  instantly revoke every previously-issued link. No remote shell is exposed over
+  the web.
+
 ## Architecture
 
 Tauri v2 · Rust backend (`russh` + `russh-sftp`) · React + TypeScript frontend.
@@ -86,6 +106,7 @@ src-tauri/src/
 ├── terminal.rs PTY channel with output coalescing
 ├── sftp/       browse session + concurrent transfer queue
 ├── ports/      scanner + parsers + forward manager
+├── web.rs      optional token-authorized HTTP control server (axum)
 └── ipc/        Tauri commands & typed event payloads
 src/            React UI (zustand store, xterm.js terminal)
 ```

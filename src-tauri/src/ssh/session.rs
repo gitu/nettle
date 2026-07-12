@@ -129,7 +129,10 @@ impl SessionActor {
                                         .handle
                                         .disconnect(russh::Disconnect::ByApplication, "", "en")
                                         .await;
-                                    ui.emit_conn(host.id, ConnState::Disconnected { host_id: host.id });
+                                    // The command layer emits the `disconnected`
+                                    // state — the actor stays silent so a reconnect
+                                    // (which tears the actor down) can't race a
+                                    // stale disconnect event over the new session.
                                     break 'main;
                                 }
                                 Some(SessionCmd::SuspectDead(id)) if id == epoch_id => break,
@@ -171,7 +174,6 @@ impl SessionActor {
                 _ = tokio::time::sleep(delay) => {}
                 cmd = cmd_rx.recv() => {
                     if matches!(cmd, Some(SessionCmd::Disconnect) | None) {
-                        ui.emit_conn(host.id, ConnState::Disconnected { host_id: host.id });
                         break 'main;
                     }
                 }
