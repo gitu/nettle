@@ -32,6 +32,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The release tag is the single source of truth for the version: inject it
+      # into tauri.conf.json (overrides Cargo.toml for bundle names, the updater,
+      # and app.getVersion()). The version fields committed on main are only used
+      # by local dev builds.
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not a vX.Y.Z release tag" >&2
+            exit 1
+          fi
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tauri.conf.json.tmp
+          mv tauri.conf.json.tmp src-tauri/tauri.conf.json
+          echo "Building nettle $VERSION"
+
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
