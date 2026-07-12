@@ -150,6 +150,12 @@ the frontend build) on every push; tagging `v*` builds and publishes installers
 for all three platforms and bumps the Homebrew cask (needs the
 `HOMEBREW_TAP_TOKEN` secret — a PAT with write access to `gitu/homebrew-tap`).
 
+To release, push a `vX.Y.Z` tag on `main` — nothing else. The release workflow
+injects the version from the tag into `tauri.conf.json` before building, so the
+version fields committed in `tauri.conf.json` / `Cargo.toml` / `package.json`
+only affect local dev builds and don't need to be bumped per release (nudge them
+occasionally so `pnpm tauri dev` shows something close to reality).
+
 ## Signing macOS builds
 
 Release DMGs are ad-hoc signed until Apple credentials are configured. To ship
