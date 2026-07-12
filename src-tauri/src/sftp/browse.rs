@@ -40,6 +40,29 @@ impl SftpBrowser {
         Ok(sftp.canonicalize(".").await?)
     }
 
+    /// Read a whole remote file into memory. Used by the web-control server to
+    /// stream a download; large files are buffered, so this is meant for the
+    /// configs/logs/artifacts a control panel typically reaches for.
+    pub async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+        let sftp = self.session().await?;
+        let mut file = sftp.open(path).await?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).await?;
+        Ok(buf)
+    }
+
+    /// Create/overwrite a remote file with the given bytes.
+    pub async fn write_file(&self, path: &str, data: &[u8]) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let sftp = self.session().await?;
+        let mut file = sftp.create(path).await?;
+        file.write_all(data).await?;
+        file.flush().await?;
+        file.shutdown().await?;
+        Ok(())
+    }
+
     pub async fn list(&self, path: &str) -> Result<DirListing> {
         let sftp = self.session().await?;
         let path = if path.is_empty() || path == "~" {

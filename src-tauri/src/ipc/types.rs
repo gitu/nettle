@@ -96,7 +96,10 @@ pub struct ForwardsChanged {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardInfo {
+    /// remote port being tunneled
     pub port: u16,
+    /// local port the tunnel is bound to (usually the same as `port`)
+    pub local_port: u16,
     pub pinned: bool,
     /// remote process is currently listening
     pub live: bool,

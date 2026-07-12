@@ -339,6 +339,43 @@ async fn wait_transfer(transfers: &Arc<TransferManager>, id: Uuid) {
 }
 
 #[tokio::test]
+async fn sftp_read_write_file_in_memory_roundtrip() {
+    if !enabled() {
+        return;
+    }
+    // These are the primitives the web-control server uses for download/upload:
+    // write bytes straight to a remote path, then read them back.
+    let mut h = connect().await;
+    wait_epoch(&mut h.epoch_rx, 1).await;
+
+    let browser = SftpBrowser::new(h.epoch_rx.clone());
+    let home = browser.home().await.expect("sftp home");
+    let path = format!("{home}/nettle-web-e2e.bin");
+
+    let payload: Vec<u8> = (0..64 * 1024).map(|i| (i * 7 % 256) as u8).collect();
+    browser
+        .write_file(&path, &payload)
+        .await
+        .expect("write_file");
+
+    let back = browser.read_file(&path).await.expect("read_file");
+    assert_eq!(back, payload, "read bytes differ from written");
+
+    // Overwrite with a shorter payload — must fully replace, not append.
+    let short = b"nettle".to_vec();
+    browser.write_file(&path, &short).await.expect("overwrite");
+    let back = browser
+        .read_file(&path)
+        .await
+        .expect("read after overwrite");
+    assert_eq!(back, short, "overwrite should truncate to the new content");
+
+    let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
+    let _ = exec_capture(&epoch.handle, &format!("rm -f {path}")).await;
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
+#[tokio::test]
 async fn forward_tunnel_to_remote_sshd() {
     if !enabled() {
         return;
@@ -384,6 +421,94 @@ async fn forward_tunnel_to_remote_sshd() {
         "expected SSH banner through tunnel, got: {banner:?}"
     );
     let _ = sock.shutdown().await;
+
+    drop(live_tx);
+    forwards.shutdown();
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
+async fn banner_through(local_port: u16) -> String {
+    let mut sock = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(("127.0.0.1", local_port)),
+    )
+    .await
+    .expect("connect timeout")
+    .expect("tcp connect through tunnel");
+    let mut buf = vec![0u8; 64];
+    let n = tokio::time::timeout(Duration::from_secs(10), sock.read(&mut buf))
+        .await
+        .expect("banner read timeout")
+        .expect("banner read");
+    let _ = sock.shutdown().await;
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+#[tokio::test]
+async fn changing_local_port_rebinds_the_forward() {
+    if !enabled() {
+        return;
+    }
+    let mut h = connect().await;
+    wait_epoch(&mut h.epoch_rx, 1).await;
+
+    let remote_port: u16 = env_or("NETTLE_E2E_REMOTE_SSH_PORT", "2222")
+        .parse()
+        .unwrap();
+    let first_local: u16 = 43230;
+    let second_local: u16 = 43231;
+
+    let (live_tx, live_rx) = watch::channel(HashSet::from([remote_port]));
+    let forwards = ForwardManager::new(
+        h.ui.clone(),
+        h.host.id,
+        h.store.clone(),
+        h.epoch_rx.clone(),
+        live_rx,
+    );
+
+    // Forward remote sshd → first local port.
+    forwards
+        .set_with_local(remote_port, first_local, true, false)
+        .await
+        .expect("bind first local port");
+    assert!(banner_through(first_local).await.starts_with("SSH-2.0"));
+    let listed = forwards.list();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].local_port, first_local);
+
+    // Retarget the SAME remote port to a different local port; the manager must
+    // tear down the old listener and bind the new one.
+    forwards
+        .set_with_local(remote_port, second_local, true, false)
+        .await
+        .expect("rebind to second local port");
+    assert!(banner_through(second_local).await.starts_with("SSH-2.0"));
+    let listed = forwards.list();
+    assert_eq!(listed.len(), 1, "still one forward for the remote port");
+    assert_eq!(listed[0].local_port, second_local);
+
+    // The old local port is no longer served.
+    let old = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::TcpStream::connect(("127.0.0.1", first_local)),
+    )
+    .await;
+    let refused = match old {
+        Err(_) => true,     // connect timed out — nothing listening
+        Ok(Err(_)) => true, // connection refused
+        Ok(Ok(mut s)) => {
+            // Bound by something, but our tunnel is gone: no SSH banner should arrive.
+            let mut b = vec![0u8; 8];
+            let r = tokio::time::timeout(Duration::from_secs(2), s.read(&mut b)).await;
+            let _ = s.shutdown().await;
+            !matches!(r, Ok(Ok(n)) if n > 0)
+        }
+    };
+    assert!(
+        refused,
+        "old local port should no longer tunnel after retarget"
+    );
 
     drop(live_tx);
     forwards.shutdown();

@@ -8,9 +8,15 @@ export function Sidebar() {
   const sets = useStore((s) => s.sets);
   const sessions = useStore((s) => s.sessions);
   const focusedHostId = useStore((s) => s.focusedHostId);
+  const view = useStore((s) => s.view);
   const connect = useStore((s) => s.connect);
   const focusHost = useStore((s) => s.focusHost);
+  const showDashboard = useStore((s) => s.showDashboard);
   const refreshSets = useStore((s) => s.refreshSets);
+
+  const sessionCount = Object.keys(sessions).length;
+  const totalTunnels = Object.values(sessions).reduce((n, s) => n + s.forwards.length, 0);
+  const dashActive = view === 'dashboard' && !focusedHostId;
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -53,6 +59,22 @@ export function Sidebar() {
 
   return (
     <div className="sidebar">
+      <div
+        className={`host-item nav-dash${dashActive ? ' active' : ''}`}
+        onClick={showDashboard}
+      >
+        <span className="nav-dash-glyph">⚲</span>
+        <div className="host-meta">
+          <div className="host-name">Dashboard</div>
+          <div className="host-addr">
+            {sessionCount === 0
+              ? 'no sessions'
+              : `${sessionCount} session${sessionCount === 1 ? '' : 's'} · ${totalTunnels} tunnel${
+                  totalTunnels === 1 ? '' : 's'
+                }`}
+          </div>
+        </div>
+      </div>
       <div className="sidebar-head">
         <span className="sidebar-label">HOSTS</span>
         <button className="add-host" onClick={() => useStore.setState({ editHost: 'new' })}>

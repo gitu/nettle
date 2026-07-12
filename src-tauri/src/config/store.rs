@@ -126,9 +126,10 @@ mod tests {
         // A second update must see the first one's writes.
         store
             .update_state(|s| {
-                s.pinned_forwards.push(crate::config::model::HostPort {
+                s.pinned_forwards.push(crate::config::model::PinnedForward {
                     host_id: host,
                     port: 3000,
+                    local_port: 0,
                 });
             })
             .await

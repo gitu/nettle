@@ -156,10 +156,11 @@ describe('applyForwards', () => {
     const s = withSession(A, { state: 'connected', hostId: A, ip: '1.1.1.1', sinceMs: 1, epoch: 1 });
     const next = applyForwards(s, {
       hostId: A,
-      forwards: [{ port: 8080, pinned: true, live: true }],
+      forwards: [{ port: 8080, localPort: 9090, pinned: true, live: true }],
     });
     expect(next.sessions[A].forwards).toHaveLength(1);
     expect(next.sessions[A].forwards[0].pinned).toBe(true);
+    expect(next.sessions[A].forwards[0].localPort).toBe(9090);
   });
 
   it('ignores forwards for an unknown host', () => {

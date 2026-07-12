@@ -1,25 +1,86 @@
 :root {
-  --bg: #0b0d10;
-  --bg-deep: #08090b;
-  --bg-side: #0d0f12;
-  --bg-head: #0e1114;
-  --bg-panel: #14171b;
-  --border: rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.09);
-  --text: #e7eaee;
-  --text-2: #c8ccd1;
-  --text-3: #d5d9de;
-  --dim: #8b939c;
-  --muted: #6a727b;
-  --faint: #59616b;
-  --faintest: #4a525b;
-  --acc: #c084fc;
-  --acc-hover: #cfa0ff;
-  --green: #4ade80;
-  --amber: #fbbf24;
-  --red: #f87171;
-  --blue: #60a5fa;
-  --violet: #a78bfa;
+  color-scheme: light dark;
+
+  /* ===== schr.ag design-system tokens ===== */
+  --font-sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', 'Symbols Nerd Font Mono',
+    'SFMono-Regular', Menlo, monospace;
+
+  /* 4px spacing grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  --text-xs: 10px;
+  --text-sm: 11.5px;
+  --text-base: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --tracking-wide: 0.08em;
+
+  /* ===== theme palette — CSS system colours only =====
+     The whole palette derives from the OS-provided system colours
+     (Canvas / CanvasText / AccentColor / GrayText), so nettle follows the
+     system light/dark appearance and the user's accent colour. `--on` is the
+     foreground ink used to derive hairlines and surface elevation. */
+  --on: CanvasText;
+
+  --bg: Canvas;
+  --bg-deep: Canvas;
+  --bg-side: color-mix(in srgb, Canvas 96%, var(--on));
+  --bg-head: color-mix(in srgb, Canvas 95%, var(--on));
+  --bg-panel: color-mix(in srgb, Canvas 93%, var(--on));
+
+  --text: CanvasText;
+  --text-2: color-mix(in srgb, var(--on) 82%, Canvas);
+  --text-3: color-mix(in srgb, var(--on) 90%, Canvas);
+  --dim: color-mix(in srgb, var(--on) 62%, Canvas);
+  --muted: GrayText;
+  --faint: color-mix(in srgb, GrayText 80%, Canvas);
+  --faintest: color-mix(in srgb, GrayText 60%, Canvas);
+
+  --border: color-mix(in srgb, var(--on) 12%, transparent);
+  --border-strong: color-mix(in srgb, var(--on) 20%, transparent);
+
+  --acc: AccentColor;
+  --acc-fg: AccentColorText;
+  --acc-hover: color-mix(in srgb, AccentColor 80%, var(--on));
+
+  /* functional status signals — no system-colour equivalents, so kept as a
+     small mode-adaptive set (danger/warning/info); "active" reuses the accent. */
+  --green: light-dark(#1a8a4f, #4ade80);
+  --amber: light-dark(#b5791a, #fbbf24);
+  --red: light-dark(#d23b40, #f87171);
+  --blue: light-dark(#2563c9, #60a5fa);
+  --violet: var(--acc);
+}
+
+/* In light mode the OS `GrayText` is quite pale; derive the muted inks from the
+   foreground ink instead so secondary text reads a bit darker and stays legible. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --muted: color-mix(in srgb, var(--on) 58%, Canvas);
+    --faint: color-mix(in srgb, var(--on) 48%, Canvas);
+    --faintest: color-mix(in srgb, var(--on) 40%, Canvas);
+    --dim: color-mix(in srgb, var(--on) 72%, Canvas);
+  }
+}
+
+::selection {
+  background: color-mix(in srgb, var(--acc) 30%, transparent);
 }
 
 /* Nerd Font symbols (powerline glyphs, dev icons) as a fallback so fancy
@@ -45,7 +106,7 @@ body,
 
 body {
   background: var(--bg);
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
+  font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
   color: var(--text);
   overflow: hidden;
@@ -58,11 +119,11 @@ body {
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.11);
+  background: color-mix(in srgb, var(--on) 11%, transparent);
   border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: color-mix(in srgb, var(--on) 20%, transparent);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -119,7 +180,7 @@ body {
   align-items: center;
   gap: 14px;
   padding: 0 14px;
-  background: linear-gradient(#14181d, #0f1216);
+  background: var(--bg-head);
   border-bottom: 1px solid var(--border);
 }
 .traffic {
@@ -151,7 +212,7 @@ body {
   flex: 1;
   text-align: center;
   font-size: 12px;
-  color: #7b838d;
+  color: var(--dim);
   letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
@@ -195,7 +256,7 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--dim);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--on) 10%, transparent);
   border-radius: 5px;
   font-size: 14px;
   cursor: pointer;
@@ -204,7 +265,7 @@ body {
 }
 .add-host:hover {
   color: var(--acc);
-  border-color: rgba(192, 132, 252, 0.5);
+  border-color: color-mix(in srgb, var(--acc) 50%, transparent);
 }
 .host-list {
   flex: 1;
@@ -222,11 +283,30 @@ body {
   border: 1px solid transparent;
 }
 .host-item.active {
-  background: rgba(192, 132, 252, 0.1);
-  border-color: rgba(192, 132, 252, 0.28);
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+  border-color: color-mix(in srgb, var(--acc) 28.0%, transparent);
 }
 .host-item:not(.active):hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--on) 3%, transparent);
+}
+/* The independent, host-agnostic dashboard entry — a peer of the host list. */
+.nav-dash {
+  margin: 10px 9px 4px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  padding-bottom: 12px;
+}
+.nav-dash.active {
+  border-bottom-color: color-mix(in srgb, var(--acc) 28%, transparent);
+}
+.nav-dash-glyph {
+  width: 7px;
+  flex: none;
+  display: flex;
+  justify-content: center;
+  color: var(--acc);
+  font-size: 13px;
+  transform: rotate(45deg);
 }
 .host-dot {
   width: 7px;
@@ -387,7 +467,7 @@ body {
 .reconn-chip {
   font-size: 10.5px;
   color: var(--amber);
-  background: rgba(251, 191, 36, 0.12);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
   border-radius: 5px;
   padding: 2px 8px;
   animation: ntl-pulse 1s infinite;
@@ -412,8 +492,8 @@ body {
 }
 .tab.active {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--on) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on) 7.0%, transparent);
 }
 .tab-badge {
   font-size: 10px;
@@ -422,16 +502,16 @@ body {
   text-align: center;
   padding: 1px 5px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--on) 7.0%, transparent);
   color: var(--acc);
 }
 .tab.active .tab-badge {
-  background: rgba(192, 132, 252, 0.22);
+  background: color-mix(in srgb, var(--acc) 22%, transparent);
 }
 .disconnect-btn {
   font-size: 11.5px;
   color: var(--dim);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--on) 10%, transparent);
   border-radius: 6px;
   padding: 6px 11px;
   cursor: pointer;
@@ -442,7 +522,7 @@ body {
   font-family: inherit;
 }
 .disconnect-btn:hover {
-  border-color: rgba(248, 113, 113, 0.5);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
   color: var(--red);
 }
 .disconnect-btn .dot {
@@ -480,6 +560,84 @@ body {
 }
 
 /* ---------- files view ---------- */
+/* ---------- file view controls ---------- */
+.file-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-head);
+  flex-wrap: wrap;
+}
+.file-search {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 6px 10px;
+  outline: none;
+  flex: 1 1 120px;
+  min-width: 90px;
+}
+.file-search:focus {
+  border-color: color-mix(in srgb, var(--acc) 50%, transparent);
+}
+.file-search::placeholder {
+  color: var(--faint);
+}
+.file-clear {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  margin-left: -4px;
+}
+.file-clear:hover {
+  color: var(--text);
+}
+.fc-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 2px;
+}
+.fc-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.fc-group {
+  display: flex;
+  gap: 4px;
+}
+.fc-chip {
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.fc-chip:hover {
+  border-color: color-mix(in srgb, var(--acc) 40%, transparent);
+  color: var(--text);
+}
+.fc-chip.on {
+  color: var(--acc-fg);
+  background: var(--acc);
+  border-color: transparent;
+  font-weight: 600;
+}
+
 .panes {
   flex: 1;
   display: flex;
@@ -491,7 +649,7 @@ body {
   flex-direction: column;
   min-width: 0;
 }
-.pane.remote {
+.pane.local {
   border-right: 1px solid var(--border);
 }
 .pane-head {
@@ -501,7 +659,7 @@ body {
   align-items: center;
   gap: 9px;
   padding: 0 13px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid color-mix(in srgb, var(--on) 5%, transparent);
   background: var(--bg-head);
 }
 .pane-label {
@@ -552,11 +710,11 @@ body {
   border-left: 2px solid transparent;
 }
 .frow:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--on) 2%, transparent);
 }
 .frow.selected {
   border-left-color: var(--acc);
-  background: rgba(192, 132, 252, 0.09);
+  background: color-mix(in srgb, var(--acc) 9%, transparent);
 }
 .ftag {
   font-size: 9px;
@@ -621,11 +779,16 @@ body {
   font-size: 11.5px;
   color: var(--faintest);
 }
+.pane-msg.error {
+  color: var(--red);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
 
 /* ---------- transfers ---------- */
 .transfers {
   flex: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-top: 1px solid color-mix(in srgb, var(--on) 7.0%, transparent);
   background: var(--bg-side);
   max-height: 196px;
   display: flex;
@@ -703,7 +866,7 @@ body {
 .tbar {
   flex: 1;
   height: 5px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--on) 6%, transparent);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -779,7 +942,7 @@ body {
 .scan-chip {
   font-size: 11.5px;
   color: var(--dim);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--on) 12%, transparent);
   border-radius: 7px;
   padding: 7px 12px;
   flex: none;
@@ -816,7 +979,7 @@ body {
   flex: none;
 }
 .pcol-act {
-  width: 120px;
+  width: 200px;
   flex: none;
   text-align: right;
 }
@@ -827,12 +990,12 @@ body {
   padding: 11px 12px;
   border-radius: 9px;
   margin-bottom: 6px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--on) 2%, transparent);
+  border: 1px solid color-mix(in srgb, var(--on) 5%, transparent);
 }
 .prow.fwd {
-  background: rgba(192, 132, 252, 0.06);
-  border-color: rgba(192, 132, 252, 0.22);
+  background: color-mix(in srgb, var(--acc) 6%, transparent);
+  border-color: color-mix(in srgb, var(--acc) 22%, transparent);
 }
 .pdot {
   width: 7px;
@@ -881,6 +1044,65 @@ body {
   color: var(--faint);
   font-weight: 400;
 }
+.plocal.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  border-bottom: 1px dashed transparent;
+}
+.plocal.linkish:hover {
+  color: var(--acc-hover);
+  border-bottom-color: color-mix(in srgb, var(--acc) 50%, transparent);
+}
+.premap {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 10.5px;
+}
+.port-input {
+  width: 62px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--acc) 50%, transparent);
+  border-radius: 5px;
+  padding: 3px 6px;
+  outline: none;
+}
+.port-input::placeholder {
+  color: var(--faint);
+}
+/* hide number-input spinners for a cleaner mono look */
+.port-input::-webkit-inner-spin-button,
+.port-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.add-fwd {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 4px 3px;
+  flex-wrap: wrap;
+}
+.add-fwd-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.add-fwd-arrow {
+  font-size: 12px;
+  color: var(--muted);
+}
+.add-fwd-err {
+  font-size: 11px;
+  color: var(--red);
+}
 .pin-btn {
   font-size: 14px;
   cursor: pointer;
@@ -903,7 +1125,7 @@ body {
 .tgl-btn {
   font-size: 11px;
   color: var(--text);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
   border-radius: 6px;
   padding: 6px 11px;
   cursor: pointer;
@@ -912,16 +1134,38 @@ body {
   font-family: inherit;
 }
 .tgl-btn:hover {
-  border-color: rgba(192, 132, 252, 0.5);
+  border-color: color-mix(in srgb, var(--acc) 50%, transparent);
 }
 .tgl-btn.on {
   font-weight: 600;
-  color: var(--bg);
+  color: var(--acc-fg);
   background: var(--acc);
   border-color: transparent;
 }
 .tgl-btn.on:hover {
   background: var(--acc-hover);
+}
+.open-btn {
+  font-size: 11px;
+  color: var(--acc);
+  border: 1px solid color-mix(in srgb, var(--acc) 30%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  flex: none;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.open-btn:hover {
+  border-color: color-mix(in srgb, var(--acc) 60%, transparent);
+  background: color-mix(in srgb, var(--acc) 8%, transparent);
+}
+.pinned-block {
+  padding-top: 4px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
 }
 .pinned-label {
   font-size: 9.5px;
@@ -940,10 +1184,10 @@ body {
   align-items: center;
   gap: 12px;
   padding: 9px 12px;
-  border: 1px dashed rgba(192, 132, 252, 0.28);
+  border: 1px dashed color-mix(in srgb, var(--acc) 28.0%, transparent);
   border-radius: 8px;
   margin-bottom: 8px;
-  background: rgba(192, 132, 252, 0.04);
+  background: color-mix(in srgb, var(--acc) 4%, transparent);
 }
 .pinned-glyph {
   color: var(--acc);
@@ -1025,7 +1269,7 @@ body {
 .btn-acc {
   font-size: 12px;
   font-weight: 600;
-  color: var(--bg);
+  color: var(--acc-fg);
   background: var(--acc);
   border-radius: 7px;
   padding: 8px 16px;
@@ -1044,7 +1288,7 @@ body {
   bottom: 30px;
   width: 344px;
   background: var(--bg-panel);
-  border: 1px solid rgba(192, 132, 252, 0.4);
+  border: 1px solid color-mix(in srgb, var(--acc) 40%, transparent);
   border-radius: 11px;
   box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.4);
   padding: 15px 16px;
@@ -1078,7 +1322,7 @@ body {
   margin-bottom: 13px;
 }
 .toast-body b {
-  color: #fff;
+  color: var(--text);
 }
 .toast-body .acc {
   color: var(--acc);
@@ -1092,7 +1336,7 @@ body {
   text-align: center;
   font-size: 12px;
   font-weight: 600;
-  color: var(--bg);
+  color: var(--acc-fg);
   background: var(--acc);
   border-radius: 7px;
   padding: 8px 0;
@@ -1108,7 +1352,7 @@ body {
   text-align: center;
   font-size: 12px;
   color: var(--text-2);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid color-mix(in srgb, var(--on) 14.0%, transparent);
   border-radius: 7px;
   padding: 8px 13px;
   cursor: pointer;
@@ -1116,7 +1360,7 @@ body {
   font-family: inherit;
 }
 .toast-secondary:hover {
-  border-color: rgba(255, 255, 255, 0.3);
+  border-color: color-mix(in srgb, var(--on) 30%, transparent);
 }
 .toast-ghost {
   flex: none;
@@ -1153,7 +1397,7 @@ body {
   padding: 18px;
 }
 .modal.danger {
-  border-color: rgba(248, 113, 113, 0.4);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
 }
 .modal-title {
   font-size: 10.5px;
@@ -1192,7 +1436,7 @@ body {
 .field input {
   width: 100%;
   background: var(--bg);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--on) 12%, transparent);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 12.5px;
@@ -1201,7 +1445,7 @@ body {
   outline: none;
 }
 .field input:focus {
-  border-color: rgba(192, 132, 252, 0.55);
+  border-color: color-mix(in srgb, var(--acc) 55.0%, transparent);
 }
 .field-row {
   display: flex;
@@ -1316,7 +1560,7 @@ body {
   margin-bottom: 2px;
 }
 .set-item:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--on) 3%, transparent);
 }
 .set-launch {
   width: 22px;
@@ -1326,15 +1570,15 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--acc);
-  background: rgba(192, 132, 252, 0.1);
-  border: 1px solid rgba(192, 132, 252, 0.28);
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--acc) 28.0%, transparent);
   border-radius: 6px;
   cursor: pointer;
   font-size: 11px;
   padding: 0;
 }
 .set-launch:hover {
-  background: rgba(192, 132, 252, 0.2);
+  background: color-mix(in srgb, var(--acc) 20%, transparent);
 }
 
 .set-hosts {
@@ -1343,7 +1587,7 @@ body {
   gap: 2px;
   max-height: 220px;
   overflow: auto;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--on) 10%, transparent);
   border-radius: 6px;
   padding: 6px;
 }
@@ -1356,7 +1600,7 @@ body {
   cursor: pointer;
 }
 .set-host:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--on) 3%, transparent);
 }
 .set-host input {
   accent-color: var(--acc);
@@ -1416,7 +1660,7 @@ body {
   border-radius: 8px;
 }
 .dash-row:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--on) 2%, transparent);
 }
 .dash-port {
   font-size: 13px;
@@ -1468,7 +1712,7 @@ body {
   height: 20px;
   flex: none;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--on) 12%, transparent);
   position: relative;
   transition: background 0.15s;
 }
@@ -1487,4 +1731,66 @@ body {
 }
 .toggle.on .toggle-knob {
   transform: translateX(14px);
+}
+
+/* ---------- remote-control modal ---------- */
+.modal.web-modal {
+  width: 460px;
+  max-width: 92vw;
+  text-align: left;
+}
+.web-desc {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 4px 0 14px;
+}
+.about-remote-btn {
+  width: 100%;
+  margin: 2px 0 12px;
+}
+.web-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.web-field-label {
+  font-size: 12px;
+  color: var(--text-2);
+  width: 44px;
+}
+.web-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+.web-link {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--acc);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 8px 10px;
+  outline: none;
+}
+.web-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 2px 0 12px;
+}
+.web-regen {
+  width: 100%;
+  font-size: 12px;
+}
+.web-err {
+  font-size: 12px;
+  color: var(--red);
+  margin: 8px 0 0;
+  word-break: break-word;
 }

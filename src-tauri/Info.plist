@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    macOS gates access to these folders behind TCC. Providing a usage
+    description makes macOS show a proper "nettle would like to access…"
+    prompt (and, on recent macOS, is required to be granted access at all)
+    the first time the local file pane reads or a transfer writes there.
+    Tauri merges this file into the generated Info.plist on macOS builds.
+  -->
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>nettle needs access to your Downloads folder to browse local files and download files here from remote hosts.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>nettle needs access to your Documents folder to browse local files and transfer them to and from remote hosts.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>nettle needs access to your Desktop folder to browse local files and transfer them to and from remote hosts.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>nettle needs access to removable volumes to browse local files and transfer them to and from remote hosts.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>nettle needs access to network volumes to browse local files and transfer them to and from remote hosts.</string>
+</dict>
+</plist>

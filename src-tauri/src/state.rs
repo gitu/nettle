@@ -56,6 +56,12 @@ pub struct UiBridge {
     pub prompts: Prompts,
     /// Last connection state per host, for frontend hydration.
     pub conn_states: StdMutex<std::collections::HashMap<uuid::Uuid, ConnState>>,
+    /// Latest listening-port snapshot per host — lets the tray build a menu
+    /// synchronously without touching the async session map.
+    pub ports: StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::RemotePort>>>,
+    /// Latest forward set per host (same rationale as `ports`).
+    pub forwards:
+        StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::ForwardInfo>>>,
 }
 
 impl UiBridge {
@@ -64,6 +70,8 @@ impl UiBridge {
             sink,
             prompts: Prompts::default(),
             conn_states: StdMutex::new(std::collections::HashMap::new()),
+            ports: StdMutex::new(std::collections::HashMap::new()),
+            forwards: StdMutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -76,6 +84,9 @@ impl UiBridge {
         let mut map = self.conn_states.lock().unwrap();
         if matches!(state, ConnState::Disconnected { .. }) {
             map.remove(&host_id);
+            // A gone session has no ports or forwards to show.
+            self.ports.lock().unwrap().remove(&host_id);
+            self.forwards.lock().unwrap().remove(&host_id);
         } else {
             map.insert(host_id, state.clone());
         }
@@ -84,10 +95,18 @@ impl UiBridge {
     }
 
     pub fn emit_ports(&self, payload: &PortsChanged) {
+        self.ports
+            .lock()
+            .unwrap()
+            .insert(payload.host_id, payload.all.clone());
         self.emit("ports-changed", payload);
     }
 
     pub fn emit_forwards(&self, payload: &crate::ipc::types::ForwardsChanged) {
+        self.forwards
+            .lock()
+            .unwrap()
+            .insert(payload.host_id, payload.forwards.clone());
         self.emit("forwards-changed", payload);
     }
 
@@ -97,6 +116,11 @@ impl UiBridge {
 
     pub fn emit_term_closed(&self, host_id: uuid::Uuid) {
         self.emit("term-closed", &serde_json::json!({ "hostId": host_id }));
+    }
+
+    /// Notify listeners (the tray) that the host list changed.
+    pub fn notify_hosts_changed(&self) {
+        self.emit("hosts-changed", &serde_json::json!({}));
     }
 
     pub fn emit_host_key_mismatch(&self, payload: &HostKeyPrompt) {
@@ -170,22 +194,31 @@ pub struct ActiveSession {
     pub scanner_task: StdMutex<Option<JoinHandle<()>>>,
 }
 
+pub type Sessions = std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>;
+
+/// Shared application state. Every field is cheap to clone (Arc / Clone), so the
+/// whole thing can be handed to the embedded web-control server, which drives
+/// the same session machinery as the Tauri commands.
+#[derive(Clone)]
 pub struct AppState {
     pub store: ConfigStore,
     /// One live session per connected host. Multiple hosts stay connected at
     /// once when the "keep connections" setting is on.
-    pub sessions: Mutex<std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>>,
+    pub sessions: Arc<Mutex<Sessions>>,
     pub ui: Arc<UiBridge>,
     pub vault: Arc<SecretVault>,
+    /// Handle to the running web-control server, if any.
+    pub web: Arc<StdMutex<Option<crate::web::WebHandle>>>,
 }
 
 impl AppState {
     pub fn new(store: ConfigStore, ui: Arc<UiBridge>) -> Self {
         Self {
             store,
-            sessions: Mutex::new(std::collections::HashMap::new()),
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             ui,
             vault: Arc::new(SecretVault::default()),
+            web: Arc::new(StdMutex::new(None)),
         }
     }
 }

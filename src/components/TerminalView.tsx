@@ -6,29 +6,46 @@ import '@xterm/xterm/css/xterm.css';
 import { api, Channel, type TermData } from '../ipc';
 import { useStore } from '../store';
 
-const THEME = {
-  background: '#08090b',
-  foreground: '#c8ccd1',
-  cursor: '#c084fc',
-  cursorAccent: '#08090b',
-  selectionBackground: 'rgba(192,132,252,0.28)',
-  black: '#1a1d21',
-  red: '#f87171',
-  green: '#4ade80',
-  yellow: '#fbbf24',
-  blue: '#60a5fa',
-  magenta: '#c084fc',
-  cyan: '#67e8f9',
-  white: '#c8ccd1',
-  brightBlack: '#59616b',
-  brightRed: '#fca5a5',
-  brightGreen: '#86efac',
-  brightYellow: '#fde68a',
-  brightBlue: '#93c5fd',
-  brightMagenta: '#d8b4fe',
-  brightCyan: '#a5f3fc',
-  brightWhite: '#e7eaee',
-};
+/** Resolve a CSS colour expression (system colours, color-mix, light-dark) to a
+ *  concrete rgb string, so the terminal can follow the OS theme + accent. */
+function resolveColor(expr: string): string {
+  const el = document.createElement('span');
+  el.style.color = expr;
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  const rgb = getComputedStyle(el).color;
+  el.remove();
+  return rgb;
+}
+
+/** xterm theme derived entirely from system colours (background/foreground/
+ *  cursor/selection) with mode-adaptive ANSI colours via light-dark(). */
+function buildTheme() {
+  const R = resolveColor;
+  return {
+    background: R('Canvas'),
+    foreground: R('CanvasText'),
+    cursor: R('AccentColor'),
+    cursorAccent: R('Canvas'),
+    selectionBackground: R('color-mix(in srgb, AccentColor 32%, transparent)'),
+    black: R('light-dark(#d5d7db, #1a1d21)'),
+    red: R('light-dark(#c0392b, #f87171)'),
+    green: R('light-dark(#1a8a4f, #4ade80)'),
+    yellow: R('light-dark(#b5791a, #fbbf24)'),
+    blue: R('light-dark(#2563c9, #60a5fa)'),
+    magenta: R('light-dark(#8b3fd6, #c084fc)'),
+    cyan: R('light-dark(#1a8a9a, #67e8f9)'),
+    white: R('light-dark(#3a3f45, #c8ccd1)'),
+    brightBlack: R('light-dark(#9aa0a8, #59616b)'),
+    brightRed: R('light-dark(#d0503f, #fca5a5)'),
+    brightGreen: R('light-dark(#2ba05f, #86efac)'),
+    brightYellow: R('light-dark(#c88a1e, #fde68a)'),
+    brightBlue: R('light-dark(#3576e0, #93c5fd)'),
+    brightMagenta: R('light-dark(#9d52e8, #d8b4fe)'),
+    brightCyan: R('light-dark(#2ba5b8, #a5f3fc)'),
+    brightWhite: R('light-dark(#1a1d21, #e7eaee)'),
+  };
+}
 
 /**
  * One xterm instance per host, kept alive for the lifetime of the session so
@@ -45,17 +62,26 @@ interface TermInstance {
 
 const registry = new Map<string, TermInstance>();
 
+// Re-theme every live terminal when the OS appearance flips light/dark.
+if (typeof window !== 'undefined' && window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    const theme = buildTheme();
+    for (const inst of registry.values()) inst.term.options.theme = theme;
+  });
+}
+
 function ensureTerminal(hostId: string, generation: number): TermInstance {
   const existing = registry.get(hostId);
   if (existing && existing.generation === generation) return existing;
   if (existing) existing.dispose();
 
   const term = new Terminal({
-    fontFamily: "'IBM Plex Mono', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, monospace",
+    fontFamily:
+      "'JetBrains Mono', 'IBM Plex Mono', 'MesloLGS NF', 'Symbols Nerd Font Mono', Menlo, monospace",
     fontSize: 13,
     lineHeight: 1.25,
     cursorBlink: true,
-    theme: THEME,
+    theme: buildTheme(),
     scrollback: 8000,
     allowProposedApi: true,
   });

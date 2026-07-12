@@ -6,7 +6,7 @@ use tauri::State;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::config::{ConnectionSet, HostConfig, HostPort, Settings};
+use crate::config::{ConnectionSet, HostConfig, HostPort, Settings, WebConfig};
 use crate::error::{NettleError, Result};
 use crate::ipc::types::{
     ConnState, DirListing, ForwardInfo, HostForward, SessionInfo, TransferDirection, TransferMeta,
@@ -50,6 +50,7 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
         None => hosts.push(host.clone()),
     }
     state.store.save_hosts(hosts).await?;
+    state.ui.notify_hosts_changed();
     Ok(host)
 }
 
@@ -62,15 +63,22 @@ pub async fn delete_host(state: State<'_, AppState>, host_id: Uuid) -> Result<()
     state.vault.forget(Some(host_id));
     let mut hosts = state.store.load_hosts().await;
     hosts.retain(|h| h.id != host_id);
-    state.store.save_hosts(hosts).await
+    state.store.save_hosts(hosts).await?;
+    state.ui.notify_hosts_changed();
+    Ok(())
 }
 
 // ---------- connection ----------
 
 #[tauri::command]
 pub async fn connect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
-    // Honour the "keep connections" setting: when off, connecting to one host
-    // tears down every other live session first.
+    connect_host(&state, host_id).await
+}
+
+/// Connect one host, honouring the "keep connections" setting (when off,
+/// connecting to one host tears down every other live session first). Shared by
+/// the Tauri command and the web-control server.
+pub(crate) async fn connect_host(state: &AppState, host_id: Uuid) -> Result<()> {
     let keep = state.store.load_state().await.settings.keep_connections;
     if !keep {
         let others: Vec<Uuid> = {
@@ -82,15 +90,15 @@ pub async fn connect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
                 .collect()
         };
         for id in others {
-            teardown(&state, id).await;
+            teardown(state, id).await;
         }
     }
-    open_session(&state, host_id).await
+    open_session(state, host_id).await
 }
 
 /// Build and register a live session for one host (idempotent — reconnecting an
 /// already-open host tears the old one down first).
-async fn open_session(state: &State<'_, AppState>, host_id: Uuid) -> Result<()> {
+pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> {
     let host = state
         .store
         .load_hosts()
@@ -102,11 +110,11 @@ async fn open_session(state: &State<'_, AppState>, host_id: Uuid) -> Result<()> 
     teardown(state, host_id).await;
 
     let persisted = state.store.load_state().await;
-    let pins: Vec<u16> = persisted
+    let pins: Vec<(u16, u16)> = persisted
         .pinned_forwards
         .iter()
         .filter(|p| p.host_id == host_id)
-        .map(|p| p.port)
+        .map(|p| (p.port, p.local_port()))
         .collect();
     let ignored: HashSet<u16> = persisted
         .ignored_ports
@@ -142,8 +150,8 @@ async fn open_session(state: &State<'_, AppState>, host_id: Uuid) -> Result<()> 
         cmd_tx.clone(),
     );
 
-    for port in pins {
-        let _ = forwards.set(port, true, true).await;
+    for (port, local_port) in pins {
+        let _ = forwards.set_with_local(port, local_port, true, true).await;
     }
 
     let session = Arc::new(ActiveSession {
@@ -161,7 +169,7 @@ async fn open_session(state: &State<'_, AppState>, host_id: Uuid) -> Result<()> 
     Ok(())
 }
 
-async fn teardown(state: &State<'_, AppState>, host_id: Uuid) {
+pub(crate) async fn teardown(state: &AppState, host_id: Uuid) {
     let old = state.sessions.lock().await.remove(&host_id);
     if let Some(old) = old {
         if let Some(term) = old.terminal.lock().unwrap().take() {
@@ -186,11 +194,17 @@ async fn teardown(state: &State<'_, AppState>, host_id: Uuid) {
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>, host_id: Uuid) -> Result<()> {
-    teardown(&state, host_id).await;
+    disconnect_host(&state, host_id).await;
+    Ok(())
+}
+
+/// Tear a session down and emit the user-facing `disconnected` event. Shared by
+/// the Tauri command and the web-control server.
+pub(crate) async fn disconnect_host(state: &AppState, host_id: Uuid) {
+    teardown(state, host_id).await;
     state
         .ui
         .emit_conn(host_id, ConnState::Disconnected { host_id });
-    Ok(())
 }
 
 #[tauri::command]
@@ -316,7 +330,7 @@ pub async fn connect_set(state: State<'_, AppState>, set_id: Uuid) -> Result<()>
 
 // ---------- per-host session access ----------
 
-async fn with_session(state: &State<'_, AppState>, host_id: Uuid) -> Result<Arc<ActiveSession>> {
+pub(crate) async fn with_session(state: &AppState, host_id: Uuid) -> Result<Arc<ActiveSession>> {
     state
         .sessions
         .lock()
@@ -462,9 +476,28 @@ pub async fn forward_set(
     port: u16,
     enabled: bool,
     pinned: bool,
+    local_port: Option<u16>,
 ) -> Result<()> {
     let session = with_session(&state, host_id).await?;
-    session.forwards.set(port, enabled, pinned).await
+    session
+        .forwards
+        .set_with_local(port, local_port.unwrap_or(0), enabled, pinned)
+        .await
+}
+
+/// Best-effort probe over the SSH connection: is the remote loopback port
+/// serving `http` or `https`? Powers the "open in browser" action so the URL
+/// gets the right scheme. Falls back to `http` when it can't tell.
+#[tauri::command]
+pub async fn probe_port_scheme(
+    state: State<'_, AppState>,
+    host_id: Uuid,
+    port: u16,
+) -> Result<String> {
+    let session = with_session(&state, host_id).await?;
+    let epoch = crate::ssh::current_epoch(&session.epoch_rx).ok_or(NettleError::NotConnected)?;
+    let scheme = crate::ssh::probe_http_scheme(&epoch.handle, port).await?;
+    Ok(scheme.to_string())
 }
 
 #[tauri::command]
@@ -509,6 +542,56 @@ pub async fn port_ignore(state: State<'_, AppState>, host_id: Uuid, port: u16) -
 }
 
 // ---------- window controls (custom titlebar) ----------
+
+// ---------- web control server ----------
+
+/// Stop any running server, then (re)start it if the config says enabled.
+/// Binding is validated before the caller persists the config.
+async fn restart_web(state: &AppState, cfg: &WebConfig) -> Result<()> {
+    let old = state.web.lock().unwrap().take();
+    if let Some(handle) = old {
+        handle.stop().await;
+    }
+    if cfg.enabled {
+        let handle = crate::web::start(state.clone(), cfg).await?;
+        *state.web.lock().unwrap() = Some(handle);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_web_config(state: State<'_, AppState>) -> Result<WebConfig> {
+    Ok(state.store.load_state().await.web)
+}
+
+#[tauri::command]
+pub async fn set_web_config(state: State<'_, AppState>, config: WebConfig) -> Result<WebConfig> {
+    let mut cfg = config;
+    // A token is minted the first time the server is switched on.
+    if cfg.enabled && cfg.token.is_empty() {
+        cfg.token = crate::config::new_web_token();
+    }
+    restart_web(&state, &cfg).await?;
+    let to_save = cfg.clone();
+    state.store.update_state(move |s| s.web = to_save).await?;
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub async fn web_regenerate_token(state: State<'_, AppState>) -> Result<WebConfig> {
+    let mut cfg = state.store.load_state().await.web;
+    cfg.token = crate::config::new_web_token();
+    restart_web(&state, &cfg).await?;
+    let to_save = cfg.clone();
+    state.store.update_state(move |s| s.web = to_save).await?;
+    Ok(cfg)
+}
+
+/// The shareable link (with the token in the URL fragment).
+#[tauri::command]
+pub async fn web_link(state: State<'_, AppState>) -> Result<String> {
+    Ok(crate::web::link(&state.store.load_state().await.web))
+}
 
 #[tauri::command]
 pub fn window_control(window: tauri::Window, action: String) {

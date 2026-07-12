@@ -41,6 +41,7 @@ interface NettleState {
   // shared local file pane
   local: DirListing | null;
   localSel: string | null;
+  localError: string | null;
 
   // modals / prompts (global, one at a time)
   hostKeyPrompt: HostKeyPrompt | null;
@@ -49,8 +50,10 @@ interface NettleState {
   editHost: HostConfig | 'new' | null;
   editSet: ConnectionSet | 'new' | null;
   aboutOpen: boolean;
+  webOpen: boolean;
 
   setView: (view: View) => void;
+  showDashboard: () => void;
   refreshHosts: () => Promise<void>;
   refreshSets: () => Promise<void>;
   connect: (hostId: string) => Promise<void>;
@@ -73,6 +76,7 @@ export const useStore = create<NettleState>((set, get) => ({
 
   local: null,
   localSel: null,
+  localError: null,
 
   hostKeyPrompt: null,
   hostKeyMismatch: null,
@@ -80,8 +84,12 @@ export const useStore = create<NettleState>((set, get) => ({
   editHost: null,
   editSet: null,
   aboutOpen: false,
+  webOpen: false,
 
   setView: (view) => set({ view }),
+  // The global dashboard is host-independent: clearing focus makes the
+  // DashboardView aggregate every session instead of a single host.
+  showDashboard: () => set({ view: 'dashboard', focusedHostId: null }),
 
   refreshHosts: async () => set({ hosts: await api.listHosts() }),
   refreshSets: async () => set({ sets: await api.listSets() }),
@@ -91,7 +99,7 @@ export const useStore = create<NettleState>((set, get) => ({
     set((s) => {
       const sessions = s.settings.keepConnections ? { ...s.sessions } : {};
       sessions[hostId] = emptySession(hostId);
-      return { sessions, focusedHostId: hostId, view: s.view === 'dashboard' ? 'ports' : s.view };
+      return { sessions, focusedHostId: hostId, view: 'dashboard' };
     });
     try {
       await api.connect(hostId);
@@ -101,7 +109,7 @@ export const useStore = create<NettleState>((set, get) => ({
     }
   },
 
-  focusHost: (hostId) => set({ focusedHostId: hostId, view: get().view === 'dashboard' ? 'ports' : get().view }),
+  focusHost: (hostId) => set({ focusedHostId: hostId, view: 'dashboard' }),
 
   disconnect: async (hostId) => {
     await api.disconnect(hostId);
@@ -121,7 +129,13 @@ export const useStore = create<NettleState>((set, get) => ({
   },
 
   navigateLocal: async (path) => {
-    set({ local: await api.localList(path), localSel: null });
+    try {
+      set({ local: await api.localList(path), localSel: null, localError: null });
+    } catch (e: unknown) {
+      // Surface the failure (e.g. macOS blocking a TCC-protected folder like
+      // Downloads) instead of silently leaving the pane unchanged.
+      set({ localError: (e as { message?: string })?.message ?? String(e) });
+    }
   },
 
   startTransfer: async (hostId, direction, name) => {
@@ -217,6 +231,11 @@ export async function initStore() {
       patchSession(set, e.payload.hostId, (s) => ({ ...s, termClosed: true })),
     ),
     listen('open-about', () => set({ aboutOpen: true })),
+    // Tray "Show" on a specific host focuses it in the window.
+    listen<string>('tray-focus-host', (e) => {
+      const hostId = e.payload;
+      if (get().sessions[hostId]) get().focusHost(hostId);
+    }),
   ]);
 
   // hydrate
