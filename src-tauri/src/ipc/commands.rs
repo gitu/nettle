@@ -186,10 +186,15 @@ pub(crate) async fn teardown(state: &AppState, host_id: Uuid) {
             scanner.abort();
         }
     }
-    // Note: teardown is intentionally silent. It's used internally by
-    // open_session to clear a stale session before reconnecting, so emitting a
-    // `disconnected` here would wipe the freshly-created session on the UI. The
-    // user-facing disconnect commands emit it explicitly.
+    // Drop the cached UI state silently so a session torn down internally (e.g.
+    // keep_connections=off) doesn't hydrate as a phantom session after a reload.
+    // Safe for the reconnect path too: open_session spawns a fresh actor right
+    // after, which re-emits its connecting/connected states.
+    state.ui.clear_conn(host_id);
+    // Note: teardown is intentionally silent about *events*. It's used
+    // internally by open_session to clear a stale session before reconnecting,
+    // so emitting a `disconnected` here would wipe the freshly-created session
+    // on the UI. The user-facing disconnect commands emit it explicitly.
 }
 
 #[tauri::command]

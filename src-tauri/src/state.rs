@@ -94,6 +94,18 @@ impl UiBridge {
         self.emit("connection-state", &state);
     }
 
+    /// Drop a host's cached UI state (connection/ports/forwards) *without*
+    /// emitting anything. Used by internal `teardown()` so that a session torn
+    /// down silently (e.g. when `keep_connections` is off and connecting to a
+    /// different host) doesn't linger in `conn_states` and reappear as a
+    /// phantom "connected" session when the frontend re-hydrates via
+    /// `list_sessions()` after a reload.
+    pub fn clear_conn(&self, host_id: uuid::Uuid) {
+        self.conn_states.lock().unwrap().remove(&host_id);
+        self.ports.lock().unwrap().remove(&host_id);
+        self.forwards.lock().unwrap().remove(&host_id);
+    }
+
     pub fn emit_ports(&self, payload: &PortsChanged) {
         self.ports
             .lock()
@@ -225,9 +237,47 @@ impl AppState {
 
 #[cfg(test)]
 mod vault_tests {
-    use super::SecretVault;
+    use super::{EventSink, SecretVault, UiBridge};
+    use crate::ipc::types::ConnState;
     use crate::ssh::auth::SecretCache;
     use uuid::Uuid;
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit_json(&self, _event: &str, _payload: serde_json::Value) {}
+    }
+
+    fn connected(host_id: Uuid) -> ConnState {
+        ConnState::Connected {
+            host_id,
+            ip: "127.0.0.1".into(),
+            since_ms: 0,
+            epoch: 1,
+        }
+    }
+
+    // Regression: a session torn down internally (keep_connections=off, or the
+    // reconnect path) must not linger in conn_states, or list_sessions() would
+    // hydrate it as a phantom "connected" session after a window reload.
+    #[test]
+    fn clear_conn_drops_cached_state_without_emitting() {
+        let ui = UiBridge::new(Box::new(NullSink));
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        ui.emit_conn(a, connected(a));
+        ui.emit_conn(b, connected(b));
+        assert!(ui.conn_states.lock().unwrap().contains_key(&a));
+
+        ui.clear_conn(a);
+        assert!(
+            !ui.conn_states.lock().unwrap().contains_key(&a),
+            "cleared host must not remain in conn_states"
+        );
+        assert!(
+            ui.conn_states.lock().unwrap().contains_key(&b),
+            "clearing one host must not touch others"
+        );
+    }
 
     fn pw(s: &str) -> SecretCache {
         SecretCache {
