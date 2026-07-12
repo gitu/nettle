@@ -31,7 +31,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~7.0.2",
-    "vite": "^7.0.4",
+    "vite": "^8.1.4",
     "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@11.9.0"
