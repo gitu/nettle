@@ -67,6 +67,8 @@ export interface RemotePort {
   bind: string;
   process: string | null;
   pid: number | null;
+  /** docker container publishing this port, if any */
+  container: string | null;
 }
 
 export interface PortsChanged {

@@ -58,6 +58,8 @@ pub struct RemotePort {
     pub bind: String,
     pub process: Option<String>,
     pub pid: Option<u32>,
+    /// Name of the docker container publishing this port, if any.
+    pub container: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
