@@ -189,7 +189,14 @@ export function PortsView() {
                 <div key={f.port} className="pinned-row">
                   <span className="pinned-glyph">⚲</span>
                   <span className="pinned-port">{f.port}</span>
-                  <span className="pinned-proc">{info?.process ?? 'waiting for process'}</span>
+                  <span className="pinned-proc">
+                    {info?.process ?? 'waiting for process'}
+                    {info?.container && (
+                      <span className="pcontainer" title={`docker container: ${info.container}`}>
+                        ⬡ {info.container}
+                      </span>
+                    )}
+                  </span>
                   <span className="pinned-tunnel">
                     localhost:{f.localPort}
                     {f.localPort !== f.port && <span className="premap"> (remap)</span>}
@@ -243,7 +250,14 @@ export function PortsView() {
                 <span className="pport">{port}</span>
               </div>
               <div className="pcol-proc" style={{ minWidth: 0 }}>
-                <div className="pproc">{info?.process ?? '—'}</div>
+                <div className="pproc">
+                  {info?.process ?? '—'}
+                  {info?.container && (
+                    <span className="pcontainer" title={`docker container: ${info.container}`}>
+                      ⬡ {info.container}
+                    </span>
+                  )}
+                </div>
                 <div className={`pstate${listening ? '' : ' waiting'}`}>
                   {listening ? 'listening' : 'waiting for process…'}
                 </div>

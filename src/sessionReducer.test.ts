@@ -115,7 +115,13 @@ describe('applyConnState — the connect lifecycle', () => {
 });
 
 describe('applyPorts', () => {
-  const port = (n: number): RemotePort => ({ port: n, bind: '0.0.0.0', process: 'node', pid: 1 });
+  const port = (n: number): RemotePort => ({
+    port: n,
+    bind: '0.0.0.0',
+    process: 'node',
+    pid: 1,
+    container: null,
+  });
   const change = (over: Partial<PortsChanged>): PortsChanged => ({
     hostId: A,
     all: [],

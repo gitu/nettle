@@ -6,6 +6,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::ipc::types::{PortsChanged, RemotePort};
+use crate::ports::docker;
 use crate::ports::forwards::ForwardManager;
 use crate::ports::parse;
 use crate::ssh::session::SessionCmd;
@@ -46,6 +47,8 @@ pub fn spawn(
             };
 
             let mut method: Option<Method> = None;
+            // None = not probed yet, Some(false) = docker unusable this epoch.
+            let mut docker_ok: Option<bool> = None;
             let mut prev: HashSet<u16> = HashSet::new();
             let mut prev_rows: Vec<RemotePort> = Vec::new();
             let mut baseline = true;
@@ -57,7 +60,21 @@ pub fn spawn(
                 };
                 match scan {
                     Ok(rows) => {
-                        let deduped = parse::dedupe_by_port(rows);
+                        let mut deduped = parse::dedupe_by_port(rows);
+                        if docker_ok != Some(false) && !deduped.is_empty() {
+                            let probe = tokio::select! {
+                                _ = epoch.cancel.cancelled() => break,
+                                r = docker::scan(&epoch) => r,
+                            };
+                            // Exec errors leave docker_ok as-is: the next
+                            // scan_once decides whether the link is dead.
+                            if let Ok(containers) = probe {
+                                docker_ok = Some(containers.is_some());
+                                if let Some(map) = containers {
+                                    docker::annotate(&mut deduped, &map);
+                                }
+                            }
+                        }
                         let ports_set: HashSet<u16> = deduped.iter().map(|p| p.port).collect();
                         let ignored_now = ignored.lock().unwrap().clone();
 

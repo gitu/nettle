@@ -1023,6 +1023,16 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.pcontainer {
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--acc);
+  background: color-mix(in srgb, var(--acc) 12%, transparent);
+  white-space: nowrap;
+}
 .pstate {
   font-size: 10.5px;
   color: var(--faint);

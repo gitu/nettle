@@ -5,6 +5,8 @@
 [![CI](https://github.com/gitu/nettle/actions/workflows/ci.yml/badge.svg)](https://github.com/gitu/nettle/actions/workflows/ci.yml)
 [![Release](https://github.com/gitu/nettle/actions/workflows/release.yml/badge.svg)](https://github.com/gitu/nettle/releases)
 
+![Port forwarding view: live remote ports with process names and docker container badges, a pinned tunnel, and one-click forwards](assets/screenshots/ports.png)
+
 nettle is a cross-platform desktop SSH client (macOS / Linux / Windows) built for
 day-to-day work against remote dev boxes:
 
@@ -30,6 +32,12 @@ day-to-day work against remote dev boxes:
   click (e.g. "production" = api + db + cache).
 - **Tray-first** — closing the window hides nettle to the menu bar / system
   tray; sessions and every pinned tunnel keep running in the background.
+
+<p>
+  <img alt="Real PTY terminal" src="assets/screenshots/terminal.png" width="32.8%" />
+  <img alt="Dual-pane file browser with transfer queue" src="assets/screenshots/files.png" width="32.8%" />
+  <img alt="Tunnels dashboard across all connected hosts" src="assets/screenshots/dashboard.png" width="32.8%" />
+</p>
 
 ## Install
 

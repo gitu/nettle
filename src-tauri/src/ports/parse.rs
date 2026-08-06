@@ -33,6 +33,7 @@ pub fn parse_ss(output: &str) -> Vec<RemotePort> {
             bind,
             process,
             pid,
+            container: None,
         });
     }
     ports
@@ -85,6 +86,7 @@ pub fn parse_netstat(output: &str) -> Vec<RemotePort> {
             bind,
             process,
             pid,
+            container: None,
         });
     }
     ports
@@ -112,6 +114,7 @@ pub fn parse_proc_net(output: &str) -> Vec<RemotePort> {
             bind,
             process: None,
             pid: None,
+            container: None,
         });
     }
     ports
@@ -232,18 +235,21 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
                 bind: "::".into(),
                 process: None,
                 pid: None,
+                container: None,
             },
             RemotePort {
                 port: 8080,
                 bind: "0.0.0.0".into(),
                 process: Some("node".into()),
                 pid: Some(1),
+                container: None,
             },
             RemotePort {
                 port: 22,
                 bind: "0.0.0.0".into(),
                 process: None,
                 pid: None,
+                container: None,
             },
         ];
         let deduped = dedupe_by_port(ports);
