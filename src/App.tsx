@@ -6,6 +6,7 @@ import { FilesView } from './components/FilesView';
 import { PortsView } from './components/PortsView';
 import { TerminalView } from './components/TerminalView';
 import { DashboardView } from './components/DashboardView';
+import { LogsView } from './components/LogsView';
 import { Toast } from './components/Toast';
 import { AuthModal, HostKeyMismatchModal, HostKeyModal, HostModal } from './components/Modals';
 import { AboutModal } from './components/AboutModal';
@@ -26,6 +27,8 @@ export default function App() {
           <Topbar />
           {view === 'dashboard' ? (
             <DashboardView />
+          ) : view === 'logs' ? (
+            <LogsView />
           ) : !hasSession ? (
             <div className="empty-state">
               <div className="glyph">◆</div>

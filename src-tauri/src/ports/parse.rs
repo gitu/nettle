@@ -128,13 +128,24 @@ fn decode_proc_addr(hex: &str) -> String {
             return format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
         }
     } else if hex.len() == 32 {
-        if hex.chars().all(|c| c == '0') {
-            return "::".to_string();
+        // IPv6: four 32-bit words, each written little-endian by the kernel.
+        let mut bytes = [0u8; 16];
+        let mut ok = true;
+        for (i, chunk) in hex.as_bytes().chunks(8).enumerate() {
+            match std::str::from_utf8(chunk)
+                .ok()
+                .and_then(|s| u32::from_str_radix(s, 16).ok())
+            {
+                Some(word) => bytes[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes()),
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
         }
-        if hex == "00000000000000000000000001000000" {
-            return "::1".to_string();
+        if ok {
+            return std::net::Ipv6Addr::from(bytes).to_string();
         }
-        return "v6".to_string();
     }
     hex.to_string()
 }
@@ -225,6 +236,27 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
         assert_eq!(ports[0].bind, "127.0.0.1");
         assert_eq!(ports[1].port, 22);
         assert_eq!(ports[1].bind, "::");
+    }
+
+    #[test]
+    fn proc_net_v6_addresses_decode_fully() {
+        // fe80::1 in the kernel's per-word little-endian hex form
+        assert_eq!(
+            decode_proc_addr("000080FE000000000000000001000000"),
+            "fe80::1"
+        );
+        assert_eq!(decode_proc_addr("00000000000000000000000001000000"), "::1");
+        assert_eq!(decode_proc_addr("00000000000000000000000000000000"), "::");
+        // 2001:db8::42
+        assert_eq!(
+            decode_proc_addr("B80D0120000000000000000042000000"),
+            "2001:db8::42"
+        );
+        // malformed hex falls through untouched
+        assert_eq!(
+            decode_proc_addr("ZZZZ0000000000000000000000000000"),
+            "ZZZZ0000000000000000000000000000"
+        );
     }
 
     #[test]

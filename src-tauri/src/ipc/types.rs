@@ -155,6 +155,28 @@ pub struct HostKeyPrompt {
     pub fingerprint: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// One line of the in-app activity log ("what has nettle been doing").
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityEntry {
+    pub seq: u64,
+    pub ts_ms: u64,
+    pub level: LogLevel,
+    /// None for app-global events (e.g. web-control server).
+    pub host_id: Option<Uuid>,
+    /// short slug: "conn" | "forward" | "scan" | "kill" | …
+    pub category: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthRequest {

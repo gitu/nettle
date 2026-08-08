@@ -1804,3 +1804,171 @@ body {
   margin: 8px 0 0;
   word-break: break-word;
 }
+
+/* ===== port error banner (bind conflicts, failed remote kills) ===== */
+.port-err-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+}
+.port-err-msg {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12px;
+  color: var(--red);
+}
+.port-err-action {
+  font-size: 11px;
+  color: var(--acc);
+  border: 1px solid color-mix(in srgb, var(--acc) 40%, transparent);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.port-err-action:hover {
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+}
+.port-err-dismiss {
+  font-size: 11px;
+  color: var(--muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 5px 6px;
+  font-family: inherit;
+}
+.port-err-dismiss:hover {
+  color: var(--text);
+}
+
+/* ===== remote kill control ===== */
+.kill-btn {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  flex: none;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.kill-btn:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.kill-btn.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  font-weight: 600;
+}
+.kill-btn.danger:hover {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+.kill-confirm {
+  display: inline-flex;
+  gap: 4px;
+  flex: none;
+}
+
+/* ===== activity log view ===== */
+.log-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.log-select {
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-family: inherit;
+}
+.log-follow,
+.log-clear {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.log-follow.on {
+  color: var(--acc);
+  border-color: color-mix(in srgb, var(--acc) 40%, transparent);
+}
+.log-follow:hover,
+.log-clear:hover {
+  border-color: color-mix(in srgb, var(--acc) 50%, transparent);
+}
+.log-body {
+  font-family: var(--font-mono);
+}
+.log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 6px;
+  font-size: 11.5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--on) 5%, transparent);
+}
+.log-row.error {
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+}
+.log-row.warn {
+  background: color-mix(in srgb, var(--amber) 5%, transparent);
+}
+.log-time {
+  color: var(--faint);
+  flex: none;
+}
+.log-level {
+  flex: none;
+  width: 42px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.log-level.warn {
+  color: var(--amber);
+}
+.log-level.error {
+  color: var(--red);
+}
+.log-host {
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--acc);
+}
+.log-cat {
+  flex: none;
+  width: 60px;
+  color: var(--dim);
+}
+.log-msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}

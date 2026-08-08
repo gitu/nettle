@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useStore } from '../store';
 import { api, type ForwardInfo, type RemotePort } from '../ipc';
@@ -9,10 +9,53 @@ async function openPortInBrowser(hostId: string, port: number, fwd: ForwardInfo 
   const scheme = await api.probePortScheme(hostId, port).catch(() => 'http' as const);
   let localPort = fwd?.localPort ?? port;
   if (!fwd) {
-    await api.forwardSet(hostId, port, true, false).catch(() => {});
+    await useStore.getState().setForward(hostId, port, true, false);
     localPort = port;
   }
   await openUrl(`${scheme}://localhost:${localPort}`).catch(() => {});
+}
+
+/** Two-step kill control for the process behind a remote port: first click asks
+ *  for confirmation, then offers a graceful SIGTERM or a hard SIGKILL. */
+function KillButton({ hostId, port, pid }: { hostId: string; port: number; pid: number | null }) {
+  const [confirming, setConfirming] = useState(false);
+  const killRemote = useStore((s) => s.killRemote);
+
+  // Arm/disarm only — auto-reset so a stray click doesn't leave a live kill UI.
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 6000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+
+  if (!confirming) {
+    return (
+      <button
+        className="kill-btn"
+        title="kill the remote process to free this port"
+        onClick={() => setConfirming(true)}
+      >
+        ✕ kill
+      </button>
+    );
+  }
+  const fire = (force: boolean) => {
+    setConfirming(false);
+    killRemote(hostId, port, pid, force);
+  };
+  return (
+    <span className="kill-confirm">
+      <button className="kill-btn danger" title="send SIGTERM (graceful)" onClick={() => fire(false)}>
+        term
+      </button>
+      <button className="kill-btn danger" title="send SIGKILL (force)" onClick={() => fire(true)}>
+        -9
+      </button>
+      <button className="kill-btn" title="cancel" onClick={() => setConfirming(false)}>
+        ✕
+      </button>
+    </span>
+  );
 }
 
 /** The local-tunnel cell: shows the bind target and lets you retarget the
@@ -28,6 +71,7 @@ function LocalTunnel({
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState('');
+  const setForward = useStore((s) => s.setForward);
 
   if (!fwd) return <span className="plocal off">not forwarded</span>;
 
@@ -35,7 +79,7 @@ function LocalTunnel({
     const next = parseInt(value, 10);
     setEditing(false);
     if (Number.isInteger(next) && next > 0 && next < 65536 && next !== fwd.localPort) {
-      api.forwardSet(hostId, port, true, fwd.pinned, next).catch(() => {});
+      setForward(hostId, port, true, fwd.pinned, next);
     }
   };
 
@@ -82,6 +126,7 @@ function AddForward({ hostId }: { hostId: string }) {
   const [remote, setRemote] = useState('');
   const [local, setLocal] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const setForward = useStore((s) => s.setForward);
 
   const submit = () => {
     const rp = parseInt(remote, 10);
@@ -94,7 +139,7 @@ function AddForward({ hostId }: { hostId: string }) {
       setError('local port must be 1–65535');
       return;
     }
-    api.forwardSet(hostId, rp, true, false, lp).catch(() => {});
+    setForward(hostId, rp, true, false, lp);
     setRemote('');
     setLocal('');
     setError(null);
@@ -138,6 +183,9 @@ export function PortsView() {
   const forwards = useStore((s) => (hostId ? (s.sessions[hostId]?.forwards ?? []) : []));
   const unsupported = useStore((s) => (hostId ? (s.sessions[hostId]?.portsUnsupported ?? false) : false));
   const connState = useStore((s) => (hostId ? s.sessions[hostId]?.conn.state : undefined));
+  const portError = useStore((s) => (hostId ? (s.sessions[hostId]?.portError ?? null) : null));
+  const setForward = useStore((s) => s.setForward);
+  const dismissPortError = useStore((s) => s.dismissPortError);
 
   if (!hostId) return null;
 
@@ -175,6 +223,24 @@ export function PortsView() {
         <div className="scan-chip">auto-scan · 3s ↻</div>
       </div>
       <div className="ports-body">
+        {portError && (
+          <div className="port-err-banner">
+            <span className="port-err-msg">{portError.message}</span>
+            {portError.hint != null && (
+              <button
+                className="port-err-action"
+                onClick={() =>
+                  setForward(hostId, portError.port, true, portError.pinned, portError.hint!)
+                }
+              >
+                bind to localhost:{portError.hint} instead
+              </button>
+            )}
+            <button className="port-err-dismiss" onClick={() => dismissPortError(hostId)}>
+              dismiss
+            </button>
+          </div>
+        )}
         {unsupported && (
           <div className="pane-msg">
             Port discovery isn't supported on this remote (no ss / netstat / procfs).
@@ -213,7 +279,7 @@ export function PortsView() {
                   </button>
                   <button
                     className="unpin-btn"
-                    onClick={() => api.forwardSet(hostId, f.port, true, false, f.localPort)}
+                    onClick={() => setForward(hostId, f.port, true, false, f.localPort)}
                   >
                     unpin
                   </button>
@@ -272,6 +338,7 @@ export function PortsView() {
                 className="pcol-act"
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}
               >
+                {listening && <KillButton hostId={hostId} port={port} pid={info?.pid ?? null} />}
                 {(listening || forwarded) && (
                   <button
                     className="open-btn"
@@ -285,7 +352,7 @@ export function PortsView() {
                   className={`pin-btn${fwd?.pinned ? ' pinned' : ''}`}
                   title={fwd?.pinned ? 'unpin' : 'pin — keep across restarts'}
                   onClick={() =>
-                    api.forwardSet(hostId, port, true, !(fwd?.pinned ?? false), fwd?.localPort)
+                    setForward(hostId, port, true, !(fwd?.pinned ?? false), fwd?.localPort)
                   }
                 >
                   ⚲
@@ -294,8 +361,8 @@ export function PortsView() {
                   className={`tgl-btn${forwarded ? ' on' : ''}`}
                   onClick={() =>
                     forwarded
-                      ? api.forwardSet(hostId, port, false, false)
-                      : api.forwardSet(hostId, port, true, false)
+                      ? setForward(hostId, port, false, false)
+                      : setForward(hostId, port, true, false)
                   }
                 >
                   {forwarded ? 'forwarded' : 'forward'}
