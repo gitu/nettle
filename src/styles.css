@@ -2018,3 +2018,43 @@ body {
   align-items: center;
   gap: 6px;
 }
+
+/* ===== tabular dashboard columns (shared widths for header + rows) ===== */
+.dash-cols {
+  padding-top: 2px;
+}
+.dcol-port {
+  width: 80px;
+  flex: none;
+}
+.dcol-proc {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+.dcol-local {
+  width: 170px;
+  flex: none;
+}
+.dcol-pin {
+  width: 74px;
+  flex: none;
+}
+.dcol-state {
+  width: 64px;
+  flex: none;
+}
+.dcol-act {
+  width: 56px;
+  flex: none;
+  text-align: right;
+}
+.dash-port-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dash-act {
+  display: inline-flex;
+  justify-content: flex-end;
+}

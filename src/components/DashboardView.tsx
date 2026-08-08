@@ -111,13 +111,25 @@ export function DashboardView() {
             {g.rows.length === 0 && (
               <div className="dash-empty">No tunnels — open one from this host's ports tab.</div>
             )}
+            {g.rows.length > 0 && (
+              <div className="pcols dash-cols">
+                <span className="dcol-port">REMOTE</span>
+                <span className="dcol-proc">PROCESS</span>
+                <span className="dcol-local">LOCAL TUNNEL</span>
+                <span className="dcol-pin">PIN</span>
+                <span className="dcol-state">STATE</span>
+                <span className="dcol-act" />
+              </div>
+            )}
             {g.rows
               .sort((a, b) => a.port - b.port)
               .map((r) => (
                 <div key={r.port} className="dash-row">
-                  <span className={`pdot${r.live ? ' live' : ' waiting'}`} />
-                  <span className="dash-port">{r.port}</span>
-                  <span className="dash-proc">
+                  <span className="dcol-port dash-port-cell">
+                    <span className={`pdot${r.live ? ' live' : ' waiting'}`} />
+                    <span className="dash-port">{r.port}</span>
+                  </span>
+                  <span className="dcol-proc dash-proc">
                     {r.process ?? (r.live ? '—' : 'no process')}
                     {r.container && (
                       <span className="pcontainer" title={`docker container: ${r.container}`}>
@@ -125,21 +137,22 @@ export function DashboardView() {
                       </span>
                     )}
                   </span>
-                  <span className="dash-tunnel">
+                  <span className="dcol-local dash-tunnel">
                     localhost:{r.localPort}
                     {r.localPort !== r.port && <span className="premap"> (remap)</span>}
                   </span>
-                  {r.pinned && <span className="dash-pin">⚲ pinned</span>}
-                  <span className={`dash-state${r.live ? ' live' : ''}`}>
+                  <span className="dcol-pin dash-pin">{r.pinned ? '⚲ pinned' : ''}</span>
+                  <span className={`dcol-state dash-state${r.live ? ' live' : ''}`}>
                     {r.live ? 'active' : 'waiting'}
                   </span>
-                  <span className="flex-1" />
-                  <button
-                    className="unpin-btn"
-                    onClick={() => setForward(r.hostId, r.port, false, false)}
-                  >
-                    stop
-                  </button>
+                  <span className="dcol-act dash-act">
+                    <button
+                      className="unpin-btn"
+                      onClick={() => setForward(r.hostId, r.port, false, false)}
+                    >
+                      stop
+                    </button>
+                  </span>
                 </div>
               ))}
           </div>
