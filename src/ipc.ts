@@ -69,6 +69,8 @@ export interface RemotePort {
   pid: number | null;
   /** docker container publishing this port, if any */
   container: string | null;
+  /** working directory of the listening process, if resolvable */
+  cwd: string | null;
 }
 
 export interface PortsChanged {
@@ -128,6 +130,21 @@ export interface AuthRequest {
 
 export interface IpcError {
   code: string;
+  message: string;
+  /** for code "port_in_use": the local port that could not be bound */
+  port?: number;
+  /** for code "port_in_use": a known-free local port to suggest instead */
+  hint?: number | null;
+}
+
+export type LogLevel = 'info' | 'warn' | 'error';
+
+export interface ActivityEntry {
+  seq: number;
+  tsMs: number;
+  level: LogLevel;
+  hostId: string | null;
+  category: string;
   message: string;
 }
 
@@ -195,6 +212,11 @@ export const api = {
     invoke<'http' | 'https'>('probe_port_scheme', { hostId, port }),
   allForwards: () => invoke<HostForward[]>('all_forwards'),
   portIgnore: (hostId: string, port: number) => invoke<void>('port_ignore', { hostId, port }),
+  portKillRemote: (hostId: string, port: number, pid: number | null, force: boolean) =>
+    invoke<string>('port_kill_remote', { hostId, port, pid, force }),
+
+  listActivity: () => invoke<ActivityEntry[]>('list_activity'),
+  clearActivity: () => invoke<void>('clear_activity'),
 
   windowControl: (action: 'close' | 'minimize' | 'maximize') =>
     invoke<void>('window_control', { action }),

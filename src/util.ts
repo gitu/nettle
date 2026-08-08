@@ -87,3 +87,23 @@ export function crumbsOf(path: string, sep: string): { label: string; target: st
   }
   return crumbs;
 }
+
+/** Directory names too generic to identify a project on their own. */
+const GENERIC_DIRS = new Set([
+  'frontend', 'backend', 'web', 'app', 'server', 'client', 'src',
+  'dist', 'build', 'api', 'ui', 'www', 'public', 'current',
+]);
+
+/** Compact display form of a process working directory: the last path
+ *  segment, or `parent/last` when the last segment alone is too generic
+ *  (e.g. `/home/x/shop/frontend` → `shop/frontend`). */
+export function shortDir(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length === 0) return '/';
+  const last = parts[parts.length - 1];
+  if (GENERIC_DIRS.has(last.toLowerCase()) && parts.length > 1) {
+    return `${parts[parts.length - 2]}/${last}`;
+  }
+  return last;
+}

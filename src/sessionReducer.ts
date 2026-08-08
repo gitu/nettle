@@ -26,6 +26,18 @@ export interface SessionState {
   termClosed: boolean;
   termGeneration: number;
   toast: { port: number; process: string | null } | null;
+  /** last failed port action (bind failure, remote kill, …), shown as a banner in PortsView */
+  portError: PortError | null;
+}
+
+export interface PortError {
+  /** remote port the action was about */
+  port: number;
+  message: string;
+  /** for local bind conflicts: a known-free local port to offer instead */
+  hint: number | null;
+  /** pin flag of the failed forward attempt, so "use hint" can retry faithfully */
+  pinned: boolean;
 }
 
 /** The slice of store state the reducers fold events into. */
@@ -48,6 +60,7 @@ export function emptySession(hostId: string): SessionState {
     termClosed: false,
     termGeneration: 0,
     toast: null,
+    portError: null,
   };
 }
 

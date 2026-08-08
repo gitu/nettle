@@ -1804,3 +1804,308 @@ body {
   margin: 8px 0 0;
   word-break: break-word;
 }
+
+/* ===== port error banner (bind conflicts, failed remote kills) ===== */
+.port-err-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+}
+.port-err-msg {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12px;
+  color: var(--red);
+}
+.port-err-action {
+  font-size: 11px;
+  color: var(--acc);
+  border: 1px solid color-mix(in srgb, var(--acc) 40%, transparent);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.port-err-action:hover {
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+}
+.port-err-dismiss {
+  font-size: 11px;
+  color: var(--muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 5px 6px;
+  font-family: inherit;
+}
+.port-err-dismiss:hover {
+  color: var(--text);
+}
+
+/* ===== remote kill control ===== */
+.kill-btn {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  flex: none;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.kill-btn:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.kill-btn.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  font-weight: 600;
+}
+.kill-btn.danger:hover {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+.kill-confirm {
+  display: inline-flex;
+  gap: 4px;
+  flex: none;
+}
+
+/* ===== activity log view ===== */
+.log-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.log-select {
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-family: inherit;
+}
+.log-follow,
+.log-clear {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.log-follow.on {
+  color: var(--acc);
+  border-color: color-mix(in srgb, var(--acc) 40%, transparent);
+}
+.log-follow:hover,
+.log-clear:hover {
+  border-color: color-mix(in srgb, var(--acc) 50%, transparent);
+}
+.log-body {
+  font-family: var(--font-mono);
+}
+.log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 6px;
+  font-size: 11.5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--on) 5%, transparent);
+}
+.log-row.error {
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+}
+.log-row.warn {
+  background: color-mix(in srgb, var(--amber) 5%, transparent);
+}
+.log-time {
+  color: var(--faint);
+  flex: none;
+}
+.log-level {
+  flex: none;
+  width: 42px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.log-level.warn {
+  color: var(--amber);
+}
+.log-level.error {
+  color: var(--red);
+}
+.log-host {
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--acc);
+}
+.log-cat {
+  flex: none;
+  width: 60px;
+  color: var(--dim);
+}
+.log-msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+/* ===== labeled pin toggle (clearer than the old icon-only button) ===== */
+.pin-tgl {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--on) 16%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  flex: none;
+  background: transparent;
+  font-family: inherit;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pin-tgl:hover {
+  color: var(--acc);
+  border-color: color-mix(in srgb, var(--acc) 50%, transparent);
+}
+.pin-tgl.on {
+  color: var(--acc);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--acc) 45%, transparent);
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+}
+.pin-glyph {
+  display: inline-block;
+  transform: rotate(45deg);
+  font-size: 13px;
+}
+
+/* dashboard process column */
+.dash-proc {
+  flex: none;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ===== tabular dashboard columns (shared widths for header + rows) ===== */
+.dash-cols {
+  padding-top: 2px;
+}
+.dcol-port {
+  width: 80px;
+  flex: none;
+}
+.dcol-proc {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+.dcol-local {
+  width: 170px;
+  flex: none;
+}
+.dcol-pin {
+  width: 74px;
+  flex: none;
+}
+.dcol-state {
+  width: 64px;
+  flex: none;
+}
+.dcol-act {
+  width: 56px;
+  flex: none;
+  text-align: right;
+}
+.dash-port-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dash-act {
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+/* ===== three-state ports table ===== */
+.pcol-state {
+  width: 128px;
+  flex: none;
+}
+.state-chip {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.state-chip.forwarded {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+.state-chip.waiting {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+}
+
+/* process working directory */
+.pcwd {
+  font-size: 10.5px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pcwd.inline {
+  display: inline;
+  flex: none;
+}
+
+/* action column widths: ports view holds kill/open/pin/forward,
+   dashboard holds open/stop */
+.pcol-act {
+  width: 310px;
+}
+.dcol-act {
+  width: 132px;
+}
+.dash-act {
+  gap: 8px;
+}

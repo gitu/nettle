@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::ipc::types::{PortsChanged, RemotePort};
+use crate::ipc::types::{LogLevel, PortsChanged, RemotePort};
 use crate::ports::docker;
 use crate::ports::forwards::ForwardManager;
 use crate::ports::parse;
@@ -49,15 +49,40 @@ pub fn spawn(
             let mut method: Option<Method> = None;
             // None = not probed yet, Some(false) = docker unusable this epoch.
             let mut docker_ok: Option<bool> = None;
+            // pid → working directory, probed once per pid per epoch
+            // (None = probed, unreadable — don't retry every scan).
+            let mut cwd_cache: std::collections::HashMap<u32, Option<String>> =
+                std::collections::HashMap::new();
             let mut prev: HashSet<u16> = HashSet::new();
             let mut prev_rows: Vec<RemotePort> = Vec::new();
             let mut baseline = true;
 
             loop {
+                let probe_method = method.is_none();
                 let scan = tokio::select! {
                     _ = epoch.cancel.cancelled() => break,
                     r = scan_once(&epoch, &mut method) => r,
                 };
+                if probe_method {
+                    if let Some(m) = method {
+                        let msg = match m {
+                            Method::Ss => "scanning remote ports via ss",
+                            Method::Netstat => "scanning remote ports via netstat",
+                            Method::ProcNet => {
+                                "scanning remote ports via /proc/net/tcp (no process names)"
+                            }
+                            Method::Unsupported => {
+                                "port discovery unsupported on this remote (no ss / netstat / procfs)"
+                            }
+                        };
+                        let level = if m == Method::Unsupported {
+                            LogLevel::Warn
+                        } else {
+                            LogLevel::Info
+                        };
+                        ui.log(level, Some(host_id), "scan", msg);
+                    }
+                }
                 match scan {
                     Ok(rows) => {
                         let mut deduped = parse::dedupe_by_port(rows);
@@ -75,6 +100,30 @@ pub fn spawn(
                                 }
                             }
                         }
+                        // Resolve working directories for newly seen pids —
+                        // tells apart e.g. several `node` dev servers.
+                        let unknown_pids: Vec<u32> = deduped
+                            .iter()
+                            .filter_map(|p| p.pid)
+                            .filter(|pid| !cwd_cache.contains_key(pid))
+                            .collect();
+                        if !unknown_pids.is_empty() {
+                            let cmd = parse::cwd_probe_command(&unknown_pids);
+                            let probe = tokio::select! {
+                                _ = epoch.cancel.cancelled() => break,
+                                r = exec_capture(&epoch.handle, &cmd) => r,
+                            };
+                            if let Ok((out, _)) = probe {
+                                let mut found = parse::parse_cwd_map(&out);
+                                for pid in unknown_pids {
+                                    cwd_cache.insert(pid, found.remove(&pid));
+                                }
+                            }
+                        }
+                        for p in deduped.iter_mut() {
+                            p.cwd = p.pid.and_then(|pid| cwd_cache.get(&pid).cloned().flatten());
+                        }
+
                         let ports_set: HashSet<u16> = deduped.iter().map(|p| p.port).collect();
                         let ignored_now = ignored.lock().unwrap().clone();
 
@@ -106,8 +155,14 @@ pub fn spawn(
                         prev_rows = deduped;
                         baseline = false;
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // exec failed — the connection is probably dead.
+                        ui.log(
+                            LogLevel::Warn,
+                            Some(host_id),
+                            "scan",
+                            format!("port scan failed ({e}); checking the connection"),
+                        );
                         let _ = session_cmd.send(SessionCmd::SuspectDead(epoch.id));
                         break;
                     }
