@@ -69,6 +69,8 @@ export interface RemotePort {
   pid: number | null;
   /** docker container publishing this port, if any */
   container: string | null;
+  /** working directory of the listening process, if resolvable */
+  cwd: string | null;
 }
 
 export interface PortsChanged {

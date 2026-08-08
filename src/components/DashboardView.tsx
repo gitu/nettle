@@ -1,4 +1,6 @@
 import { useStore } from '../store';
+import { shortDir } from '../util';
+import { openPortInBrowser } from '../openPort';
 
 interface Row {
   hostId: string;
@@ -10,6 +12,7 @@ interface Row {
   live: boolean;
   process: string | null;
   container: string | null;
+  cwd: string | null;
 }
 
 export function DashboardView() {
@@ -42,6 +45,7 @@ export function DashboardView() {
           live: f.live,
           process: info?.process ?? null,
           container: info?.container ?? null,
+          cwd: info?.cwd ?? null,
         };
       });
       return { hostId: sess.hostId, hostName: host?.name ?? sess.hostId, connected, host, rows };
@@ -136,6 +140,11 @@ export function DashboardView() {
                         ⬡ {r.container}
                       </span>
                     )}
+                    {r.cwd && (
+                      <span className="pcwd inline" title={r.cwd}>
+                        in {shortDir(r.cwd)}
+                      </span>
+                    )}
                   </span>
                   <span className="dcol-local dash-tunnel">
                     localhost:{r.localPort}
@@ -146,6 +155,13 @@ export function DashboardView() {
                     {r.live ? 'active' : 'waiting'}
                   </span>
                   <span className="dcol-act dash-act">
+                    <button
+                      className="open-btn"
+                      title="open localhost tunnel in browser"
+                      onClick={() => openPortInBrowser(r.hostId, r.port, r.localPort)}
+                    >
+                      ↗ open
+                    </button>
                     <button
                       className="unpin-btn"
                       onClick={() => setForward(r.hostId, r.port, false, false)}

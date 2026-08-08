@@ -1,19 +1,8 @@
 import { useEffect, useState } from 'react';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { useStore } from '../store';
-import { api, type ForwardInfo, type RemotePort } from '../ipc';
-
-/** Forward the port if needed, sniff http vs https over the SSH link, then open
- *  the local tunnel in the default browser. */
-async function openPortInBrowser(hostId: string, port: number, fwd: ForwardInfo | null) {
-  const scheme = await api.probePortScheme(hostId, port).catch(() => 'http' as const);
-  let localPort = fwd?.localPort ?? port;
-  if (!fwd) {
-    await useStore.getState().setForward(hostId, port, true, false);
-    localPort = port;
-  }
-  await openUrl(`${scheme}://localhost:${localPort}`).catch(() => {});
-}
+import type { ForwardInfo, RemotePort } from '../ipc';
+import { shortDir } from '../util';
+import { openPortInBrowser } from '../openPort';
 
 /** Two-step kill control for the process behind a remote port: first click asks
  *  for confirmation, then offers a graceful SIGTERM or a hard SIGKILL. */
@@ -177,6 +166,15 @@ function AddForward({ hostId }: { hostId: string }) {
   );
 }
 
+/** Every port appears exactly once, in one of three states. */
+type RowState = 'open' | 'forwarded' | 'waiting';
+
+const STATE_LABEL: Record<RowState, string> = {
+  open: 'open on host',
+  forwarded: 'forwarded',
+  waiting: 'waiting for process',
+};
+
 export function PortsView() {
   const hostId = useStore((s) => s.focusedHostId);
   const ports = useStore((s) => (hostId ? (s.sessions[hostId]?.ports ?? []) : []));
@@ -194,20 +192,27 @@ export function PortsView() {
   const connected = connState === 'connected';
 
   const fwdByPort = new Map<number, ForwardInfo>(forwards.map((f) => [f.port, f]));
-  const portByNum = new Map<number, RemotePort>(ports.map((p) => [p.port, p]));
 
-  // Union: everything the scanner sees + forwards whose remote process is gone.
-  // Sorted so active tunnels float to the top: pinned first, then other
-  // forwards, then the remaining listening ports — each group by port number.
+  // Union of scanner results and forwards whose remote process is gone — each
+  // port exactly once. Active tunnels float to the top: pinned first, then
+  // other forwards, then the remaining listening ports — each group by port.
   const rank = (r: { fwd: ForwardInfo | null }) => (r.fwd ? (r.fwd.pinned ? 0 : 1) : 2);
-  const rows: { port: number; info: RemotePort | null; fwd: ForwardInfo | null }[] = [
+  const rows: {
+    port: number;
+    info: RemotePort | null;
+    fwd: ForwardInfo | null;
+    state: RowState;
+  }[] = [
     ...ports.map((p) => ({ port: p.port, info: p, fwd: fwdByPort.get(p.port) ?? null })),
     ...forwards
-      .filter((f) => !portByNum.has(f.port))
+      .filter((f) => !ports.some((p) => p.port === f.port))
       .map((f) => ({ port: f.port, info: null, fwd: f })),
-  ].sort((a, b) => rank(a) - rank(b) || a.port - b.port);
-
-  const pinned = forwards.filter((f) => f.pinned);
+  ]
+    .map((r) => ({
+      ...r,
+      state: (r.fwd ? (r.fwd.live ? 'forwarded' : 'waiting') : 'open') as RowState,
+    }))
+    .sort((a, b) => rank(a) - rank(b) || a.port - b.port);
 
   return (
     <div className="view">
@@ -246,52 +251,11 @@ export function PortsView() {
             Port discovery isn't supported on this remote (no ss / netstat / procfs).
           </div>
         )}
-        {pinned.length > 0 && (
-          <div className="pinned-block">
-            <div className="pinned-label">PINNED · SURVIVES RESTARTS</div>
-            {pinned.map((f) => {
-              const info = portByNum.get(f.port);
-              return (
-                <div key={f.port} className="pinned-row">
-                  <span className="pinned-glyph">⚲</span>
-                  <span className="pinned-port">{f.port}</span>
-                  <span className="pinned-proc">
-                    {info?.process ?? 'waiting for process'}
-                    {info?.container && (
-                      <span className="pcontainer" title={`docker container: ${info.container}`}>
-                        ⬡ {info.container}
-                      </span>
-                    )}
-                  </span>
-                  <span className="pinned-tunnel">
-                    localhost:{f.localPort}
-                    {f.localPort !== f.port && <span className="premap"> (remap)</span>}
-                  </span>
-                  <span className={`pinned-live${f.live ? '' : ' waiting'}`}>
-                    {f.live ? 'active' : 'reconnecting'}
-                  </span>
-                  <button
-                    className="open-btn"
-                    title="open in browser"
-                    onClick={() => openPortInBrowser(hostId, f.port, f)}
-                  >
-                    ↗ open
-                  </button>
-                  <button
-                    className="unpin-btn"
-                    onClick={() => setForward(hostId, f.port, true, false, f.localPort)}
-                  >
-                    unpin
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
         <div className="pcols">
           <span className="pcol-port">REMOTE</span>
           <span className="pcol-proc">PROCESS</span>
           <span className="pcol-bind">BIND</span>
+          <span className="pcol-state">STATE</span>
           <span className="pcol-local">LOCAL TUNNEL</span>
           <span className="pcol-act">ACTIONS</span>
         </div>
@@ -306,11 +270,11 @@ export function PortsView() {
                   : 'Not connected — this host is unreachable or the session is down.'}
           </div>
         )}
-        {rows.map(({ port, info, fwd }) => {
+        {rows.map(({ port, info, fwd, state }) => {
           const listening = info != null;
-          const forwarded = fwd != null;
+          const dir = shortDir(info?.cwd);
           return (
-            <div key={port} className={`prow${forwarded ? ' fwd' : ''}`}>
+            <div key={port} className={`prow${fwd ? ' fwd' : ''}`}>
               <div className="pcol-port" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className={`pdot${listening ? ' live' : ' waiting'}`} />
                 <span className="pport">{port}</span>
@@ -324,12 +288,17 @@ export function PortsView() {
                     </span>
                   )}
                 </div>
-                <div className={`pstate${listening ? '' : ' waiting'}`}>
-                  {listening ? 'listening' : 'waiting for process…'}
-                </div>
+                {dir && (
+                  <div className="pcwd" title={info?.cwd ?? undefined}>
+                    in {dir}
+                  </div>
+                )}
               </div>
               <span className="pcol-bind pbind">
                 {info ? `${info.bind}:${port}` : '—'}
+              </span>
+              <span className="pcol-state">
+                <span className={`state-chip ${state}`}>{STATE_LABEL[state]}</span>
               </span>
               <div className="pcol-local">
                 <LocalTunnel hostId={hostId} port={port} fwd={fwd} />
@@ -339,11 +308,11 @@ export function PortsView() {
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}
               >
                 {listening && <KillButton hostId={hostId} port={port} pid={info?.pid ?? null} />}
-                {(listening || forwarded) && (
+                {(listening || fwd) && (
                   <button
                     className="open-btn"
                     title="open in browser (forwards if needed)"
-                    onClick={() => openPortInBrowser(hostId, port, fwd)}
+                    onClick={() => openPortInBrowser(hostId, port, fwd?.localPort ?? null)}
                   >
                     ↗ open
                   </button>
@@ -362,14 +331,14 @@ export function PortsView() {
                   <span className="pin-glyph">⚲</span> {fwd?.pinned ? 'pinned' : 'pin'}
                 </button>
                 <button
-                  className={`tgl-btn${forwarded ? ' on' : ''}`}
+                  className={`tgl-btn${fwd ? ' on' : ''}`}
                   onClick={() =>
-                    forwarded
+                    fwd
                       ? setForward(hostId, port, false, false)
                       : setForward(hostId, port, true, false)
                   }
                 >
-                  {forwarded ? 'forwarded' : 'forward'}
+                  {fwd ? 'forwarded' : 'forward'}
                 </button>
               </div>
             </div>

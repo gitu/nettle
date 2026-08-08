@@ -49,6 +49,10 @@ pub fn spawn(
             let mut method: Option<Method> = None;
             // None = not probed yet, Some(false) = docker unusable this epoch.
             let mut docker_ok: Option<bool> = None;
+            // pid → working directory, probed once per pid per epoch
+            // (None = probed, unreadable — don't retry every scan).
+            let mut cwd_cache: std::collections::HashMap<u32, Option<String>> =
+                std::collections::HashMap::new();
             let mut prev: HashSet<u16> = HashSet::new();
             let mut prev_rows: Vec<RemotePort> = Vec::new();
             let mut baseline = true;
@@ -96,6 +100,30 @@ pub fn spawn(
                                 }
                             }
                         }
+                        // Resolve working directories for newly seen pids —
+                        // tells apart e.g. several `node` dev servers.
+                        let unknown_pids: Vec<u32> = deduped
+                            .iter()
+                            .filter_map(|p| p.pid)
+                            .filter(|pid| !cwd_cache.contains_key(pid))
+                            .collect();
+                        if !unknown_pids.is_empty() {
+                            let cmd = parse::cwd_probe_command(&unknown_pids);
+                            let probe = tokio::select! {
+                                _ = epoch.cancel.cancelled() => break,
+                                r = exec_capture(&epoch.handle, &cmd) => r,
+                            };
+                            if let Ok((out, _)) = probe {
+                                let mut found = parse::parse_cwd_map(&out);
+                                for pid in unknown_pids {
+                                    cwd_cache.insert(pid, found.remove(&pid));
+                                }
+                            }
+                        }
+                        for p in deduped.iter_mut() {
+                            p.cwd = p.pid.and_then(|pid| cwd_cache.get(&pid).cloned().flatten());
+                        }
+
                         let ports_set: HashSet<u16> = deduped.iter().map(|p| p.port).collect();
                         let ignored_now = ignored.lock().unwrap().clone();
 

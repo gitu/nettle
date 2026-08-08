@@ -86,6 +86,7 @@ dns|0.0.0.0:5353->53/udp\n";
                 process: Some("docker-proxy".into()),
                 pid: Some(100),
                 container: None,
+                cwd: None,
             },
             RemotePort {
                 port: 22,
@@ -93,6 +94,7 @@ dns|0.0.0.0:5353->53/udp\n";
                 process: Some("sshd".into()),
                 pid: Some(1),
                 container: None,
+                cwd: None,
             },
         ];
         let mut map = HashMap::new();

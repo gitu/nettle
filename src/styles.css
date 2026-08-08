@@ -2058,3 +2058,54 @@ body {
   display: inline-flex;
   justify-content: flex-end;
 }
+
+/* ===== three-state ports table ===== */
+.pcol-state {
+  width: 128px;
+  flex: none;
+}
+.state-chip {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.state-chip.forwarded {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+.state-chip.waiting {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+}
+
+/* process working directory */
+.pcwd {
+  font-size: 10.5px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pcwd.inline {
+  display: inline;
+  flex: none;
+}
+
+/* action column widths: ports view holds kill/open/pin/forward,
+   dashboard holds open/stop */
+.pcol-act {
+  width: 310px;
+}
+.dcol-act {
+  width: 132px;
+}
+.dash-act {
+  gap: 8px;
+}

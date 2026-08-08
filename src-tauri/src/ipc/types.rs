@@ -60,6 +60,9 @@ pub struct RemotePort {
     pub pid: Option<u32>,
     /// Name of the docker container publishing this port, if any.
     pub container: Option<String>,
+    /// Working directory of the listening process (Linux, via /proc), if known.
+    /// Distinguishes e.g. two `node` dev servers by project directory.
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
