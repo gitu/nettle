@@ -349,13 +349,17 @@ export function PortsView() {
                   </button>
                 )}
                 <button
-                  className={`pin-btn${fwd?.pinned ? ' pinned' : ''}`}
-                  title={fwd?.pinned ? 'unpin' : 'pin — keep across restarts'}
+                  className={`pin-tgl${fwd?.pinned ? ' on' : ''}`}
+                  title={
+                    fwd?.pinned
+                      ? 'unpin — stop keeping this tunnel across restarts'
+                      : 'pin — forward now and keep the tunnel across restarts and reconnects'
+                  }
                   onClick={() =>
                     setForward(hostId, port, true, !(fwd?.pinned ?? false), fwd?.localPort)
                   }
                 >
-                  ⚲
+                  <span className="pin-glyph">⚲</span> {fwd?.pinned ? 'pinned' : 'pin'}
                 </button>
                 <button
                   className={`tgl-btn${forwarded ? ' on' : ''}`}

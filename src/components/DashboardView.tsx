@@ -1,13 +1,15 @@
 import { useStore } from '../store';
-import { api } from '../ipc';
 
 interface Row {
   hostId: string;
   hostName: string;
   connected: boolean;
   port: number;
+  localPort: number;
   pinned: boolean;
   live: boolean;
+  process: string | null;
+  container: string | null;
 }
 
 export function DashboardView() {
@@ -16,6 +18,7 @@ export function DashboardView() {
   const focusedHostId = useStore((s) => s.focusedHostId);
   const focusHost = useStore((s) => s.focusHost);
   const setView = useStore((s) => s.setView);
+  const setForward = useStore((s) => s.setForward);
 
   // Single-host mode when a host is focused (the per-host dashboard tab);
   // otherwise aggregate every session (the independent global dashboard).
@@ -26,14 +29,21 @@ export function DashboardView() {
     .map((sess) => {
       const host = hosts.find((h) => h.id === sess.hostId);
       const connected = sess.conn.state === 'connected';
-      const rows: Row[] = sess.forwards.map((f) => ({
-        hostId: sess.hostId,
-        hostName: host?.name ?? sess.hostId,
-        connected,
-        port: f.port,
-        pinned: f.pinned,
-        live: f.live,
-      }));
+      const portInfo = new Map(sess.ports.map((p) => [p.port, p]));
+      const rows: Row[] = sess.forwards.map((f) => {
+        const info = portInfo.get(f.port);
+        return {
+          hostId: sess.hostId,
+          hostName: host?.name ?? sess.hostId,
+          connected,
+          port: f.port,
+          localPort: f.localPort,
+          pinned: f.pinned,
+          live: f.live,
+          process: info?.process ?? null,
+          container: info?.container ?? null,
+        };
+      });
       return { hostId: sess.hostId, hostName: host?.name ?? sess.hostId, connected, host, rows };
     })
     .sort((a, b) => a.hostName.localeCompare(b.hostName));
@@ -41,6 +51,12 @@ export function DashboardView() {
   const totalTunnels = groups.reduce((n, g) => n + g.rows.length, 0);
   const totalActive = groups.reduce((n, g) => n + g.rows.filter((r) => r.live).length, 0);
   const scopedName = scoped ? (groups[0]?.hostName ?? '') : '';
+
+  // Pinned forwards whose remote process is gone — candidates for bulk cleanup.
+  const stalePins = groups.flatMap((g) => g.rows.filter((r) => r.pinned && !r.live));
+  const unpinStale = () => {
+    for (const r of stalePins) setForward(r.hostId, r.port, false, false);
+  };
 
   return (
     <div className="view">
@@ -53,6 +69,15 @@ export function DashboardView() {
               : `Every forward across all connected hosts. ${totalTunnels} tunnel${totalTunnels === 1 ? '' : 's'} · ${totalActive} active.`}
           </div>
         </div>
+        {stalePins.length > 0 && (
+          <button
+            className="open-btn"
+            title="remove every pinned tunnel whose remote process is gone"
+            onClick={unpinStale}
+          >
+            ⌫ unpin {stalePins.length} without a process
+          </button>
+        )}
       </div>
       <div className="ports-body">
         {groups.length === 0 && (
@@ -92,7 +117,18 @@ export function DashboardView() {
                 <div key={r.port} className="dash-row">
                   <span className={`pdot${r.live ? ' live' : ' waiting'}`} />
                   <span className="dash-port">{r.port}</span>
-                  <span className="dash-tunnel">localhost:{r.port}</span>
+                  <span className="dash-proc">
+                    {r.process ?? (r.live ? '—' : 'no process')}
+                    {r.container && (
+                      <span className="pcontainer" title={`docker container: ${r.container}`}>
+                        ⬡ {r.container}
+                      </span>
+                    )}
+                  </span>
+                  <span className="dash-tunnel">
+                    localhost:{r.localPort}
+                    {r.localPort !== r.port && <span className="premap"> (remap)</span>}
+                  </span>
                   {r.pinned && <span className="dash-pin">⚲ pinned</span>}
                   <span className={`dash-state${r.live ? ' live' : ''}`}>
                     {r.live ? 'active' : 'waiting'}
@@ -100,7 +136,7 @@ export function DashboardView() {
                   <span className="flex-1" />
                   <button
                     className="unpin-btn"
-                    onClick={() => api.forwardSet(r.hostId, r.port, false, false).catch(() => {})}
+                    onClick={() => setForward(r.hostId, r.port, false, false)}
                   >
                     stop
                   </button>
