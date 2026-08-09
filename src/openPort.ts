@@ -10,6 +10,10 @@ export async function openPortInBrowser(hostId: string, port: number, localPort:
   let target = localPort ?? port;
   if (localPort == null) {
     await useStore.getState().setForward(hostId, port, true, false);
+    // Bind failed (e.g. local port in use) — the banner explains it; opening
+    // localhost would just land on whatever squats on that port.
+    const err = useStore.getState().sessions[hostId]?.portError;
+    if (err?.port === port) return;
     target = port;
   }
   await openUrl(`${scheme}://localhost:${target}`).catch(() => {});

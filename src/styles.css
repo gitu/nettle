@@ -979,7 +979,8 @@ body {
   flex: none;
 }
 .pcol-act {
-  width: 200px;
+  /* holds the kill + open + pin + forward buttons */
+  width: 310px;
   flex: none;
   text-align: right;
 }
@@ -2045,7 +2046,8 @@ body {
   flex: none;
 }
 .dcol-act {
-  width: 56px;
+  /* holds the open + stop buttons */
+  width: 132px;
   flex: none;
   text-align: right;
 }
@@ -2057,6 +2059,7 @@ body {
 .dash-act {
   display: inline-flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 /* ===== three-state ports table ===== */
@@ -2096,16 +2099,4 @@ body {
 .pcwd.inline {
   display: inline;
   flex: none;
-}
-
-/* action column widths: ports view holds kill/open/pin/forward,
-   dashboard holds open/stop */
-.pcol-act {
-  width: 310px;
-}
-.dcol-act {
-  width: 132px;
-}
-.dash-act {
-  gap: 8px;
 }

@@ -161,7 +161,7 @@ pub fn spawn(
                             LogLevel::Warn,
                             Some(host_id),
                             "scan",
-                            format!("port scan failed ({e}); checking the connection"),
+                            format!("port scan failed ({}); checking the connection", e),
                         );
                         let _ = session_cmd.send(SessionCmd::SuspectDead(epoch.id));
                         break;

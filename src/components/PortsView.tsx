@@ -192,6 +192,7 @@ export function PortsView() {
   const connected = connState === 'connected';
 
   const fwdByPort = new Map<number, ForwardInfo>(forwards.map((f) => [f.port, f]));
+  const scannedPorts = new Set(ports.map((p) => p.port));
 
   // Union of scanner results and forwards whose remote process is gone — each
   // port exactly once. Active tunnels float to the top: pinned first, then
@@ -205,7 +206,7 @@ export function PortsView() {
   }[] = [
     ...ports.map((p) => ({ port: p.port, info: p, fwd: fwdByPort.get(p.port) ?? null })),
     ...forwards
-      .filter((f) => !ports.some((p) => p.port === f.port))
+      .filter((f) => !scannedPorts.has(f.port))
       .map((f) => ({ port: f.port, info: null, fwd: f })),
   ]
     .map((r) => ({
