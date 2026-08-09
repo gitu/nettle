@@ -33,8 +33,33 @@ pub fn current_epoch(rx: &EpochRx) -> Option<Arc<ConnectionEpoch>> {
     rx.borrow().clone()
 }
 
+/// Open a direct-tcpip channel to the remote's loopback. Tries IPv4 first,
+/// then `::1` — services bound only to the IPv6 loopback (e.g. `::1:port` or a
+/// v6-only `[::]` listener with `net.ipv6.bindv6only`) are unreachable via
+/// 127.0.0.1. The original (v4) error is reported if both fail.
+pub async fn channel_open_loopback(
+    handle: &client::Handle<ClientHandler>,
+    port: u16,
+    orig_ip: &str,
+    orig_port: u32,
+) -> Result<russh::Channel<client::Msg>> {
+    match handle
+        .channel_open_direct_tcpip("127.0.0.1", port as u32, orig_ip, orig_port)
+        .await
+    {
+        Ok(c) => Ok(c),
+        Err(v4_err) => match handle
+            .channel_open_direct_tcpip("::1", port as u32, orig_ip, orig_port)
+            .await
+        {
+            Ok(c) => Ok(c),
+            Err(_) => Err(v4_err.into()),
+        },
+    }
+}
+
 /// Best-effort detection of what a remote loopback port is serving. Opens a
-/// direct-tcpip channel to `127.0.0.1:port`, sends a plaintext HTTP request and
+/// direct-tcpip channel to the loopback port, sends a plaintext HTTP request and
 /// inspects the first response bytes: an HTTPS server rejects the cleartext
 /// request with a TLS record (handshake 0x16 / alert 0x15, version 0x03xx),
 /// while an HTTP server answers `HTTP/…`. Defaults to `"http"` when ambiguous.
@@ -42,9 +67,7 @@ pub async fn probe_http_scheme(
     handle: &client::Handle<ClientHandler>,
     port: u16,
 ) -> Result<&'static str> {
-    let channel = handle
-        .channel_open_direct_tcpip("127.0.0.1", port as u32, "127.0.0.1", 0)
-        .await?;
+    let channel = channel_open_loopback(handle, port, "127.0.0.1", 0).await?;
     let mut stream = channel.into_stream();
     stream
         .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n")

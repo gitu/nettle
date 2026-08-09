@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import {
   api,
   Channel,
+  type ActivityEntry,
   type AuthRequest,
   type ConnectionSet,
   type ConnState,
@@ -10,6 +11,7 @@ import {
   type ForwardsChanged,
   type HostConfig,
   type HostKeyPrompt,
+  type IpcError,
   type PortsChanged,
   type Settings,
   type TransferMeta,
@@ -25,7 +27,10 @@ import {
   type TransferRow,
 } from './sessionReducer';
 
-export type View = 'files' | 'ports' | 'terminal' | 'dashboard';
+export type View = 'files' | 'ports' | 'terminal' | 'dashboard' | 'logs';
+
+/** Client-side cap mirroring the backend's activity ring buffer. */
+const ACTIVITY_CAP = 1000;
 
 export type { SessionState, TransferRow };
 
@@ -37,6 +42,7 @@ interface NettleState {
   sessions: Record<string, SessionState>;
   focusedHostId: string | null;
   view: View;
+  activity: ActivityEntry[];
 
   // shared local file pane
   local: DirListing | null;
@@ -63,6 +69,18 @@ interface NettleState {
   navigateLocal: (path: string) => Promise<void>;
   startTransfer: (hostId: string, direction: 'down' | 'up', name: string) => Promise<void>;
   dismissToast: (hostId: string) => void;
+
+  /** forwardSet that surfaces failures (port in use, …) as a PortsView banner */
+  setForward: (
+    hostId: string,
+    port: number,
+    enabled: boolean,
+    pinned: boolean,
+    localPort?: number,
+  ) => Promise<void>;
+  killRemote: (hostId: string, port: number, pid: number | null, force: boolean) => Promise<void>;
+  dismissPortError: (hostId: string) => void;
+  clearActivity: () => Promise<void>;
 }
 
 export const useStore = create<NettleState>((set, get) => ({
@@ -73,6 +91,7 @@ export const useStore = create<NettleState>((set, get) => ({
   sessions: {},
   focusedHostId: null,
   view: 'ports',
+  activity: [],
 
   local: null,
   localSel: null,
@@ -167,6 +186,48 @@ export const useStore = create<NettleState>((set, get) => ({
   },
 
   dismissToast: (hostId) => patchSession(set, hostId, (s) => ({ ...s, toast: null })),
+
+  setForward: async (hostId, port, enabled, pinned, localPort) => {
+    try {
+      await api.forwardSet(hostId, port, enabled, pinned, localPort);
+      patchSession(set, hostId, (s) =>
+        s.portError?.port === port ? { ...s, portError: null } : s,
+      );
+    } catch (e: unknown) {
+      const err = e as IpcError;
+      patchSession(set, hostId, (s) => ({
+        ...s,
+        portError: {
+          port,
+          message: err?.message ?? String(e),
+          hint: err?.code === 'port_in_use' ? (err.hint ?? null) : null,
+          pinned,
+        },
+      }));
+    }
+  },
+
+  killRemote: async (hostId, port, pid, force) => {
+    try {
+      await api.portKillRemote(hostId, port, pid, force);
+      patchSession(set, hostId, (s) =>
+        s.portError?.port === port ? { ...s, portError: null } : s,
+      );
+    } catch (e: unknown) {
+      const err = e as IpcError;
+      patchSession(set, hostId, (s) => ({
+        ...s,
+        portError: { port, message: err?.message ?? String(e), hint: null, pinned: false },
+      }));
+    }
+  },
+
+  dismissPortError: (hostId) => patchSession(set, hostId, (s) => ({ ...s, portError: null })),
+
+  clearActivity: async () => {
+    await api.clearActivity().catch(() => {});
+    set({ activity: [] });
+  },
 }));
 
 type SetFn = (partial: Partial<NettleState> | ((s: NettleState) => Partial<NettleState>)) => void;
@@ -224,6 +285,10 @@ export async function initStore() {
 
     listen<TransferMeta>('transfer-updated', (e) => set((s) => applyTransfer(s, e.payload))),
 
+    listen<ActivityEntry>('activity', (e) =>
+      set((s) => ({ activity: [...s.activity, e.payload].slice(-ACTIVITY_CAP) })),
+    ),
+
     listen<HostKeyPrompt>('host-key-prompt', (e) => set({ hostKeyPrompt: e.payload })),
     listen<HostKeyPrompt>('host-key-mismatch', (e) => set({ hostKeyMismatch: e.payload })),
     listen<AuthRequest>('auth-request', (e) => set({ authRequest: e.payload })),
@@ -239,22 +304,31 @@ export async function initStore() {
   ]);
 
   // hydrate
-  const [hosts, sets, settings, sessions] = await Promise.all([
+  const [hosts, sets, settings, sessions, activity] = await Promise.all([
     api.listHosts(),
     api.listSets(),
     api.getSettings(),
     api.listSessions(),
+    api.listActivity().catch(() => [] as ActivityEntry[]),
   ]);
   const sessionMap: Record<string, SessionState> = {};
   for (const info of sessions) {
     sessionMap[info.hostId] = { ...emptySession(info.hostId), conn: info.conn };
   }
-  set({
-    hosts,
-    sets,
-    settings,
-    sessions: sessionMap,
-    focusedHostId: Object.keys(sessionMap)[0] ?? null,
+  set((s) => {
+    // Events may already have streamed in while hydrating — merge by seq.
+    const seen = new Set(activity.map((a) => a.seq));
+    const merged = [...activity, ...s.activity.filter((a) => !seen.has(a.seq))].slice(
+      -ACTIVITY_CAP,
+    );
+    return {
+      hosts,
+      sets,
+      settings,
+      sessions: sessionMap,
+      focusedHostId: Object.keys(sessionMap)[0] ?? null,
+      activity: merged,
+    };
   });
   for (const hostId of Object.keys(sessionMap)) {
     get().navigateRemote(hostId, '~').catch(() => {});

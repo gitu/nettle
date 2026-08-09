@@ -17,6 +17,10 @@ export function Sidebar() {
   const sessionCount = Object.keys(sessions).length;
   const totalTunnels = Object.values(sessions).reduce((n, s) => n + s.forwards.length, 0);
   const dashActive = view === 'dashboard' && !focusedHostId;
+  const logsActive = view === 'logs';
+  const activityWarns = useStore(
+    (s) => s.activity.filter((a) => a.level === 'warn' || a.level === 'error').length,
+  );
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -72,6 +76,18 @@ export function Sidebar() {
               : `${sessionCount} session${sessionCount === 1 ? '' : 's'} · ${totalTunnels} tunnel${
                   totalTunnels === 1 ? '' : 's'
                 }`}
+          </div>
+        </div>
+      </div>
+      <div
+        className={`host-item nav-dash${logsActive ? ' active' : ''}`}
+        onClick={() => useStore.setState({ view: 'logs' })}
+      >
+        <span className="nav-dash-glyph">☰</span>
+        <div className="host-meta">
+          <div className="host-name">Activity</div>
+          <div className="host-addr">
+            {activityWarns > 0 ? `${activityWarns} warning${activityWarns === 1 ? '' : 's'}` : 'log'}
           </div>
         </div>
       </div>

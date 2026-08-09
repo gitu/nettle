@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::config::{ConnectionSet, HostConfig, HostPort, Settings, WebConfig};
 use crate::error::{NettleError, Result};
 use crate::ipc::types::{
-    ConnState, DirListing, ForwardInfo, HostForward, SessionInfo, TransferDirection, TransferMeta,
-    TransferProgress,
+    ActivityEntry, ConnState, DirListing, ForwardInfo, HostForward, LogLevel, SessionInfo,
+    TransferDirection, TransferMeta, TransferProgress,
 };
 use crate::local_fs;
 use crate::ports::forwards::ForwardManager;
@@ -533,6 +533,72 @@ pub async fn all_forwards(state: State<'_, AppState>) -> Result<Vec<HostForward>
     Ok(out)
 }
 
+/// The shell command used to free a remote port: signal the owning pid when the
+/// scanner knows it, otherwise fall back to `fuser` matching by port. stderr is
+/// folded into the captured output so failures carry the remote's message.
+/// (pub for the e2e suite, which runs it against a real sshd.)
+pub fn kill_command(port: u16, pid: Option<u32>, force: bool) -> String {
+    let sig = if force { "KILL" } else { "TERM" };
+    match pid {
+        Some(pid) => format!("kill -{sig} {pid} 2>&1"),
+        None => format!("fuser -k -{sig} {port}/tcp 2>&1"),
+    }
+}
+
+/// Kill the process listening on a remote port, so the port can be reused
+/// (e.g. restart a dev server that left a stale instance behind). Graceful
+/// SIGTERM by default; `force` sends SIGKILL.
+#[tauri::command]
+pub async fn port_kill_remote(
+    state: State<'_, AppState>,
+    host_id: Uuid,
+    port: u16,
+    pid: Option<u32>,
+    force: bool,
+) -> Result<String> {
+    let session = with_session(&state, host_id).await?;
+    let epoch = crate::ssh::current_epoch(&session.epoch_rx).ok_or(NettleError::NotConnected)?;
+
+    let target = match pid {
+        Some(pid) => format!("pid {pid} (port {port})"),
+        None => format!("the process on port {port}"),
+    };
+    let sig = if force { "SIGKILL" } else { "SIGTERM" };
+    let (out, exit) =
+        crate::ssh::exec_capture(&epoch.handle, &kill_command(port, pid, force)).await?;
+
+    if exit == Some(0) {
+        let msg = format!("sent {sig} to {target}");
+        state
+            .ui
+            .log(LogLevel::Info, Some(host_id), "kill", msg.clone());
+        Ok(msg)
+    } else {
+        let detail = out.trim();
+        let msg = if detail.is_empty() {
+            format!("could not signal {target} — the process may need elevated privileges, or fuser is not installed")
+        } else {
+            format!("could not signal {target}: {detail}")
+        };
+        state
+            .ui
+            .log(LogLevel::Error, Some(host_id), "kill", msg.clone());
+        Err(NettleError::Msg(msg))
+    }
+}
+
+// ---------- activity log ----------
+
+#[tauri::command]
+pub fn list_activity(state: State<'_, AppState>) -> Vec<ActivityEntry> {
+    state.ui.activity_snapshot()
+}
+
+#[tauri::command]
+pub fn clear_activity(state: State<'_, AppState>) {
+    state.ui.clear_activity();
+}
+
 #[tauri::command]
 pub async fn port_ignore(state: State<'_, AppState>, host_id: Uuid, port: u16) -> Result<()> {
     let key = HostPort { host_id, port };
@@ -596,6 +662,32 @@ pub async fn web_regenerate_token(state: State<'_, AppState>) -> Result<WebConfi
 #[tauri::command]
 pub async fn web_link(state: State<'_, AppState>) -> Result<String> {
     Ok(crate::web::link(&state.store.load_state().await.web))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kill_command;
+
+    #[test]
+    fn kill_by_pid_uses_kill() {
+        assert_eq!(
+            kill_command(3000, Some(1234), false),
+            "kill -TERM 1234 2>&1"
+        );
+        assert_eq!(kill_command(3000, Some(1234), true), "kill -KILL 1234 2>&1");
+    }
+
+    #[test]
+    fn kill_without_pid_falls_back_to_fuser() {
+        assert_eq!(
+            kill_command(8080, None, false),
+            "fuser -k -TERM 8080/tcp 2>&1"
+        );
+        assert_eq!(
+            kill_command(8080, None, true),
+            "fuser -k -KILL 8080/tcp 2>&1"
+        );
+    }
 }
 
 #[tauri::command]

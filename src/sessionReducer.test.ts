@@ -121,6 +121,7 @@ describe('applyPorts', () => {
     process: 'node',
     pid: 1,
     container: null,
+    cwd: null,
   });
   const change = (over: Partial<PortsChanged>): PortsChanged => ({
     hostId: A,

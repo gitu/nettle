@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::config::{ConfigStore, PinnedForward};
 use crate::error::{NettleError, Result};
-use crate::ipc::types::ForwardInfo;
+use crate::ipc::types::{ForwardInfo, LogLevel};
 use crate::ssh::EpochRx;
 use crate::state::UiBridge;
 
@@ -103,6 +103,12 @@ impl ForwardManager {
             let entry = self.entries.lock().unwrap().remove(&port);
             if let Some(entry) = entry {
                 entry.stop.cancel();
+                self.ui.log(
+                    LogLevel::Info,
+                    Some(self.host_id),
+                    "forward",
+                    format!("removed forward {port} → localhost:{}", entry.local_port),
+                );
             }
             self.persist_pin(port, 0, false).await;
             self.broadcast();
@@ -133,9 +139,42 @@ impl ForwardManager {
             old.stop.cancel();
         }
 
-        let listener = TcpListener::bind(("127.0.0.1", local_port))
-            .await
-            .map_err(|e| NettleError::Msg(format!("cannot bind localhost:{local_port}: {e}")))?;
+        // Bind the IPv4 loopback (mandatory) and the IPv6 loopback
+        // (best-effort) so clients hitting either resolution of `localhost`
+        // land in the tunnel.
+        let listener_v4 = match TcpListener::bind(("127.0.0.1", local_port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                let err = if e.kind() == std::io::ErrorKind::AddrInUse {
+                    NettleError::PortInUse {
+                        port: local_port,
+                        hint: free_local_port().await,
+                    }
+                } else {
+                    NettleError::Msg(format!("cannot bind localhost:{local_port}: {e}"))
+                };
+                self.ui.log(
+                    LogLevel::Error,
+                    Some(self.host_id),
+                    "forward",
+                    format!("cannot forward {port}: {err}"),
+                );
+                return Err(err);
+            }
+        };
+        let listener_v6 = match TcpListener::bind(("::1", local_port)).await {
+            Ok(l) => Some(l),
+            Err(e) => {
+                self.ui.log(
+                    LogLevel::Warn,
+                    Some(self.host_id),
+                    "forward",
+                    format!("forward {port}: IPv6 loopback [::1]:{local_port} unavailable ({e}); tunnel is IPv4-only"),
+                );
+                None
+            }
+        };
+
         let stop = CancellationToken::new();
         self.entries.lock().unwrap().insert(
             port,
@@ -147,6 +186,30 @@ impl ForwardManager {
         );
         self.persist_pin(port, local_port, pinned).await;
 
+        self.spawn_accept_loop(listener_v4, port, stop.clone());
+        if let Some(listener) = listener_v6 {
+            self.spawn_accept_loop(listener, port, stop);
+        }
+        self.ui.log(
+            LogLevel::Info,
+            Some(self.host_id),
+            "forward",
+            format!(
+                "forwarding remote {port} → localhost:{local_port}{}",
+                if pinned { " (pinned)" } else { "" }
+            ),
+        );
+
+        self.broadcast();
+        Ok(())
+    }
+
+    fn spawn_accept_loop(
+        self: &Arc<Self>,
+        listener: TcpListener,
+        port: u16,
+        stop: CancellationToken,
+    ) {
         let mgr = self.clone();
         tokio::spawn(async move {
             loop {
@@ -154,19 +217,15 @@ impl ForwardManager {
                     _ = stop.cancelled() => break,
                     accepted = listener.accept() => {
                         let Ok((sock, peer)) = accepted else { break };
-                        let epoch_rx = mgr.epoch_rx.clone();
-                        let live_rx = mgr.ports_live_rx.clone();
                         let conn_stop = stop.child_token();
+                        let mgr = mgr.clone();
                         tokio::spawn(async move {
-                            let _ = proxy(sock, peer, port, epoch_rx, live_rx, conn_stop).await;
+                            let _ = proxy(&mgr, sock, peer, port, conn_stop).await;
                         });
                     }
                 }
             }
         });
-
-        self.broadcast();
-        Ok(())
     }
 
     pub fn shutdown(&self) {
@@ -195,15 +254,23 @@ impl ForwardManager {
     }
 }
 
+/// A free ephemeral local port, offered as a "try this instead" hint when the
+/// requested one is taken.
+async fn free_local_port() -> Option<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.ok()?;
+    listener.local_addr().ok().map(|a| a.port())
+}
+
 /// Proxy one accepted local connection through a direct-tcpip channel.
 async fn proxy(
+    mgr: &ForwardManager,
     mut sock: tokio::net::TcpStream,
     peer: std::net::SocketAddr,
     port: u16,
-    mut epoch_rx: EpochRx,
-    mut live_rx: watch::Receiver<HashSet<u16>>,
     stop: CancellationToken,
 ) -> Result<()> {
+    let mut epoch_rx = mgr.epoch_rx.clone();
+    let mut live_rx = mgr.ports_live_rx.clone();
     // Wait (bounded) for a live epoch AND the remote port to be listening.
     let deadline = tokio::time::Instant::now() + WAIT_GRACE;
     let epoch = loop {
@@ -222,15 +289,25 @@ async fn proxy(
         }
     };
 
-    let channel = epoch
-        .handle
-        .channel_open_direct_tcpip(
-            "127.0.0.1",
-            port as u32,
-            peer.ip().to_string(),
-            peer.port() as u32,
-        )
-        .await?;
+    let channel = match crate::ssh::channel_open_loopback(
+        &epoch.handle,
+        port,
+        &peer.ip().to_string(),
+        peer.port() as u32,
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            mgr.ui.log(
+                LogLevel::Warn,
+                Some(mgr.host_id),
+                "forward",
+                format!("forward {port}: remote refused the connection ({e})"),
+            );
+            return Err(e);
+        }
+    };
     let mut stream = channel.into_stream();
 
     tokio::select! {

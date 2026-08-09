@@ -34,6 +34,7 @@ pub fn parse_ss(output: &str) -> Vec<RemotePort> {
             process,
             pid,
             container: None,
+            cwd: None,
         });
     }
     ports
@@ -87,6 +88,7 @@ pub fn parse_netstat(output: &str) -> Vec<RemotePort> {
             process,
             pid,
             container: None,
+            cwd: None,
         });
     }
     ports
@@ -115,6 +117,7 @@ pub fn parse_proc_net(output: &str) -> Vec<RemotePort> {
             process: None,
             pid: None,
             container: None,
+            cwd: None,
         });
     }
     ports
@@ -128,13 +131,24 @@ fn decode_proc_addr(hex: &str) -> String {
             return format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
         }
     } else if hex.len() == 32 {
-        if hex.chars().all(|c| c == '0') {
-            return "::".to_string();
+        // IPv6: four 32-bit words, each written little-endian by the kernel.
+        let mut bytes = [0u8; 16];
+        let mut ok = true;
+        for (i, chunk) in hex.as_bytes().chunks(8).enumerate() {
+            match std::str::from_utf8(chunk)
+                .ok()
+                .and_then(|s| u32::from_str_radix(s, 16).ok())
+            {
+                Some(word) => bytes[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes()),
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
         }
-        if hex == "00000000000000000000000001000000" {
-            return "::1".to_string();
+        if ok {
+            return std::net::Ipv6Addr::from(bytes).to_string();
         }
-        return "v6".to_string();
     }
     hex.to_string()
 }
@@ -152,6 +166,35 @@ fn split_bind(local: &str) -> Option<(String, u16)> {
         a => a.to_string(),
     };
     Some((bind, port))
+}
+
+/// Shell command resolving each pid's working directory via /proc (Linux;
+/// harmless empty output elsewhere). One "pid path" line per pid.
+pub fn cwd_probe_command(pids: &[u32]) -> String {
+    let list = pids
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("for p in {list}; do echo \"$p $(readlink /proc/$p/cwd 2>/dev/null)\"; done")
+}
+
+/// Parse `cwd_probe_command` output ("pid path" lines; paths may contain
+/// spaces, pids without a readable cwd have an empty path).
+pub fn parse_cwd_map(output: &str) -> std::collections::HashMap<u32, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in output.lines() {
+        let Some((pid, path)) = line.trim_end().split_once(' ') else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        if path.starts_with('/') {
+            map.insert(pid, path.to_string());
+        }
+    }
+    map
 }
 
 /// Collapse rows to one per port (a dual-stack service shows v4+v6 rows);
@@ -228,6 +271,48 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
     }
 
     #[test]
+    fn proc_net_v6_addresses_decode_fully() {
+        // fe80::1 in the kernel's per-word little-endian hex form
+        assert_eq!(
+            decode_proc_addr("000080FE000000000000000001000000"),
+            "fe80::1"
+        );
+        assert_eq!(decode_proc_addr("00000000000000000000000001000000"), "::1");
+        assert_eq!(decode_proc_addr("00000000000000000000000000000000"), "::");
+        // 2001:db8::42
+        assert_eq!(
+            decode_proc_addr("B80D0120000000000000000042000000"),
+            "2001:db8::42"
+        );
+        // malformed hex falls through untouched
+        assert_eq!(
+            decode_proc_addr("ZZZZ0000000000000000000000000000"),
+            "ZZZZ0000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn cwd_probe_roundtrip() {
+        let cmd = cwd_probe_command(&[1234, 42]);
+        assert_eq!(
+            cmd,
+            "for p in 1234 42; do echo \"$p $(readlink /proc/$p/cwd 2>/dev/null)\"; done"
+        );
+        let out = "1234 /home/deploy/apps/frontend\n42 \n7 /srv/my app/dir\nbogus line\n";
+        let map = parse_cwd_map(out);
+        assert_eq!(
+            map.get(&1234).map(String::as_str),
+            Some("/home/deploy/apps/frontend")
+        );
+        assert_eq!(map.get(&42), None, "empty path means unreadable cwd");
+        assert_eq!(
+            map.get(&7).map(String::as_str),
+            Some("/srv/my app/dir"),
+            "paths with spaces survive"
+        );
+    }
+
+    #[test]
     fn dedupe_dual_stack() {
         let ports = vec![
             RemotePort {
@@ -236,6 +321,7 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
                 process: None,
                 pid: None,
                 container: None,
+                cwd: None,
             },
             RemotePort {
                 port: 8080,
@@ -243,6 +329,7 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
                 process: Some("node".into()),
                 pid: Some(1),
                 container: None,
+                cwd: None,
             },
             RemotePort {
                 port: 22,
@@ -250,6 +337,7 @@ tcp6       0      0 :::8080                 :::*                    LISTEN      
                 process: None,
                 pid: None,
                 container: None,
+                cwd: None,
             },
         ];
         let deduped = dedupe_by_port(ports);

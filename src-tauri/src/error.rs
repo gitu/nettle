@@ -23,6 +23,8 @@ pub enum NettleError {
     Timeout,
     #[error("not connected")]
     NotConnected,
+    #[error("localhost:{port} is already in use by another application on this machine")]
+    PortInUse { port: u16, hint: Option<u16> },
     #[error("{0}")]
     Permission(String),
     #[error("{0}")]
@@ -42,6 +44,7 @@ impl NettleError {
             NettleError::Dns(_) => "dns",
             NettleError::Timeout => "timeout",
             NettleError::NotConnected => "not_connected",
+            NettleError::PortInUse { .. } => "port_in_use",
             NettleError::Permission(_) => "permission",
             NettleError::Msg(_) => "error",
         }
@@ -50,9 +53,17 @@ impl NettleError {
 
 impl Serialize for NettleError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut s = serializer.serialize_struct("NettleError", 2)?;
+        let fields = match self {
+            NettleError::PortInUse { .. } => 4,
+            _ => 2,
+        };
+        let mut s = serializer.serialize_struct("NettleError", fields)?;
         s.serialize_field("code", self.code())?;
         s.serialize_field("message", &self.to_string())?;
+        if let NettleError::PortInUse { port, hint } = self {
+            s.serialize_field("port", port)?;
+            s.serialize_field("hint", hint)?;
+        }
         s.end()
     }
 }

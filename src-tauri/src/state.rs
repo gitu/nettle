@@ -6,7 +6,9 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::config::{ConfigStore, HostConfig};
-use crate::ipc::types::{AuthRequest, ConnState, HostKeyPrompt, PortsChanged, TransferMeta};
+use crate::ipc::types::{
+    ActivityEntry, AuthRequest, ConnState, HostKeyPrompt, LogLevel, PortsChanged, TransferMeta,
+};
 use crate::ports::forwards::ForwardManager;
 use crate::sftp::browse::SftpBrowser;
 use crate::sftp::transfers::TransferManager;
@@ -62,7 +64,18 @@ pub struct UiBridge {
     /// Latest forward set per host (same rationale as `ports`).
     pub forwards:
         StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::ForwardInfo>>>,
+    activity: StdMutex<ActivityBuf>,
 }
+
+/// Bounded in-memory activity log backing the in-app "activity" view.
+#[derive(Default)]
+struct ActivityBuf {
+    entries: std::collections::VecDeque<ActivityEntry>,
+    next_seq: u64,
+}
+
+/// Cap on retained activity entries; older ones fall off the front.
+const ACTIVITY_CAP: usize = 1000;
 
 impl UiBridge {
     pub fn new(sink: Box<dyn EventSink>) -> Arc<Self> {
@@ -72,7 +85,50 @@ impl UiBridge {
             conn_states: StdMutex::new(std::collections::HashMap::new()),
             ports: StdMutex::new(std::collections::HashMap::new()),
             forwards: StdMutex::new(std::collections::HashMap::new()),
+            activity: StdMutex::new(ActivityBuf::default()),
         })
+    }
+
+    /// Append to the activity log and push the entry to the UI.
+    pub fn log(
+        &self,
+        level: LogLevel,
+        host_id: Option<uuid::Uuid>,
+        category: &str,
+        message: impl Into<String>,
+    ) {
+        let entry = {
+            let mut buf = self.activity.lock().unwrap();
+            let entry = ActivityEntry {
+                seq: buf.next_seq,
+                ts_ms: crate::ssh::now_ms(),
+                level,
+                host_id,
+                category: category.to_string(),
+                message: message.into(),
+            };
+            buf.next_seq += 1;
+            buf.entries.push_back(entry.clone());
+            while buf.entries.len() > ACTIVITY_CAP {
+                buf.entries.pop_front();
+            }
+            entry
+        };
+        self.emit("activity", &entry);
+    }
+
+    pub fn activity_snapshot(&self) -> Vec<ActivityEntry> {
+        self.activity
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub fn clear_activity(&self) {
+        self.activity.lock().unwrap().entries.clear();
     }
 
     fn emit<T: Serialize>(&self, event: &str, payload: &T) {
@@ -81,6 +137,27 @@ impl UiBridge {
     }
 
     pub fn emit_conn(&self, host_id: uuid::Uuid, state: ConnState) {
+        let (level, msg) = match &state {
+            ConnState::Disconnected { .. } => (LogLevel::Info, "disconnected".to_string()),
+            ConnState::Connecting { .. } => (LogLevel::Info, "connecting…".to_string()),
+            ConnState::Authenticating { .. } => (LogLevel::Info, "authenticating…".to_string()),
+            ConnState::Connected { ip, epoch, .. } => (
+                LogLevel::Info,
+                if *epoch > 1 {
+                    format!("reconnected to {ip} (link #{epoch})")
+                } else {
+                    format!("connected to {ip}")
+                },
+            ),
+            ConnState::Reconnecting { attempt, .. } => {
+                (LogLevel::Warn, format!("reconnecting (attempt {attempt})"))
+            }
+            ConnState::Failed { error, .. } => {
+                (LogLevel::Error, format!("connection failed: {error}"))
+            }
+        };
+        self.log(level, Some(host_id), "conn", msg);
+
         let mut map = self.conn_states.lock().unwrap();
         if matches!(state, ConnState::Disconnected { .. }) {
             map.remove(&host_id);
@@ -277,6 +354,24 @@ mod vault_tests {
             ui.conn_states.lock().unwrap().contains_key(&b),
             "clearing one host must not touch others"
         );
+    }
+
+    #[test]
+    fn activity_log_caps_and_orders_entries() {
+        use crate::ipc::types::LogLevel;
+        let ui = UiBridge::new(Box::new(NullSink));
+        for i in 0..1100u32 {
+            ui.log(LogLevel::Info, None, "test", format!("entry {i}"));
+        }
+        let snap = ui.activity_snapshot();
+        assert_eq!(snap.len(), 1000, "buffer must cap at 1000 entries");
+        assert_eq!(snap.first().unwrap().message, "entry 100");
+        assert_eq!(snap.last().unwrap().message, "entry 1099");
+        // seq keeps growing even when old entries fall off
+        assert_eq!(snap.last().unwrap().seq, 1099);
+
+        ui.clear_activity();
+        assert!(ui.activity_snapshot().is_empty());
     }
 
     fn pw(s: &str) -> SecretCache {

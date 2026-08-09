@@ -422,6 +422,27 @@ async fn forward_tunnel_to_remote_sshd() {
     );
     let _ = sock.shutdown().await;
 
+    // The forward also binds the IPv6 loopback, so clients whose `localhost`
+    // resolves to ::1 must reach the same tunnel.
+    let mut sock6 = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(("::1", local_port)),
+    )
+    .await
+    .expect("v6 connect timeout")
+    .expect("tcp connect through tunnel via ::1");
+    let mut banner6 = vec![0u8; 64];
+    let n = tokio::time::timeout(Duration::from_secs(10), sock6.read(&mut banner6))
+        .await
+        .expect("v6 banner read timeout")
+        .expect("v6 banner read");
+    let banner6 = String::from_utf8_lossy(&banner6[..n]);
+    assert!(
+        banner6.starts_with("SSH-2.0"),
+        "expected SSH banner through [::1] tunnel, got: {banner6:?}"
+    );
+    let _ = sock6.shutdown().await;
+
     drop(live_tx);
     forwards.shutdown();
     h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
@@ -608,4 +629,39 @@ async fn two_concurrent_sessions_stay_independent() {
     );
 
     b.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
+/// The remote-kill mechanism behind "free this port": signal a process on the
+/// remote by pid and verify it actually dies.
+#[tokio::test]
+async fn remote_kill_frees_a_process() {
+    if !enabled() {
+        return;
+    }
+    let mut h = connect().await;
+    let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
+
+    // Start a long-lived process on the remote and capture its pid.
+    let (out, _) = exec_capture(&epoch.handle, "sleep 300 >/dev/null 2>&1 & echo $!")
+        .await
+        .unwrap();
+    let pid: u32 = out.trim().parse().expect("pid from remote");
+
+    let (_, exit) = exec_capture(&epoch.handle, &format!("kill -0 {pid} 2>&1"))
+        .await
+        .unwrap();
+    assert_eq!(exit, Some(0), "sleep process should be running");
+
+    // Send it the exact command port_kill_remote issues.
+    let cmd = nettle_lib::ipc::commands::kill_command(0, Some(pid), false);
+    let (out, exit) = exec_capture(&epoch.handle, &cmd).await.unwrap();
+    assert_eq!(exit, Some(0), "kill should succeed, got: {out:?}");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, exit) = exec_capture(&epoch.handle, &format!("kill -0 {pid} 2>&1"))
+        .await
+        .unwrap();
+    assert_ne!(exit, Some(0), "process should be gone after SIGTERM");
+
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
 }
