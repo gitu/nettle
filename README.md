@@ -5,14 +5,16 @@
 [![CI](https://github.com/gitu/nettle/actions/workflows/ci.yml/badge.svg)](https://github.com/gitu/nettle/actions/workflows/ci.yml)
 [![Release](https://github.com/gitu/nettle/actions/workflows/release.yml/badge.svg)](https://github.com/gitu/nettle/releases)
 
-![Port forwarding view: live remote ports with process names and docker container badges, a pinned tunnel, and one-click forwards](assets/screenshots/ports.png)
+![Port forwarding view: every remote port in one table with state chips (open on host / forwarded / waiting for process), process names with working directories and docker container badges, pinned tunnels, and kill/open/pin/forward actions](assets/screenshots/ports.png)
 
 nettle is a cross-platform desktop SSH client (macOS / Linux / Windows) built for
 day-to-day work against remote dev boxes:
 
 - **Live port discovery** — nettle watches which TCP ports are listening on the
-  remote (process name included) and shows them the moment they appear. A new
-  dev server pops a toast: *Forward & pin / Just once / Ignore*.
+  remote (process name and working directory included, so two `node` servers
+  are easy to tell apart) and shows them the moment they appear. A new dev server
+  pops a toast: *Forward & pin / Just once / Ignore*. Need the port back? Kill
+  the remote process right from the row (SIGTERM, or SIGKILL if it insists).
 - **Pinned tunnels that survive everything** — a pinned forward keeps its local
   listener alive across remote process restarts *and* SSH reconnects. Kill your
   remote `vite dev`, start it again, and `localhost:5173` just works — no clicks.
@@ -27,16 +29,21 @@ day-to-day work against remote dev boxes:
   keeps its own live terminal, tunnels, and transfers. Switching hosts leaves
   the others running (toggle off in About if you prefer one-at-a-time).
 - **Tunnels dashboard** — one overview of every forward across every connected
-  host, grouped by host, with live/waiting status and quick stop.
+  host, grouped by host, with process info, live/waiting status, open-in-browser
+  and quick stop — plus one-click cleanup of pins whose process is gone.
+- **Activity log** — an in-app log of everything nettle does (connections,
+  tunnels, port scans, kills), filterable by host and severity. Bind conflicts
+  surface as actionable errors with a known-free port to use instead.
 - **Connection sets** — name a group of hosts and bring them all up with one
   click (e.g. "production" = api + db + cache).
 - **Tray-first** — closing the window hides nettle to the menu bar / system
   tray; sessions and every pinned tunnel keep running in the background.
 
 <p>
-  <img alt="Real PTY terminal" src="assets/screenshots/terminal.png" width="32.8%" />
-  <img alt="Dual-pane file browser with transfer queue" src="assets/screenshots/files.png" width="32.8%" />
-  <img alt="Tunnels dashboard across all connected hosts" src="assets/screenshots/dashboard.png" width="32.8%" />
+  <img alt="Real PTY terminal" src="assets/screenshots/terminal.png" width="49.3%" />
+  <img alt="Dual-pane file browser with transfer queue" src="assets/screenshots/files.png" width="49.3%" />
+  <img alt="Tunnels dashboard across all connected hosts with process info and open/stop actions" src="assets/screenshots/dashboard.png" width="49.3%" />
+  <img alt="Activity log with per-host and per-level filters" src="assets/screenshots/activity.png" width="49.3%" />
 </p>
 
 ## Install

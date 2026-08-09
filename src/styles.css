@@ -2064,7 +2064,8 @@ body {
 
 /* ===== three-state ports table ===== */
 .pcol-state {
-  width: 128px;
+  /* fits the widest chip ("waiting for process") without overflowing */
+  width: 150px;
   flex: none;
 }
 .state-chip {
