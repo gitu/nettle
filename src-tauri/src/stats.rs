@@ -288,7 +288,10 @@ mod tests {
         let snap = s.snapshot();
         assert_eq!(snap.connects, 1, "a reconnect is not a new connect");
         assert_eq!(snap.reconnects, 1);
-        assert!(snap.last_error.is_none(), "a successful link clears the error");
+        assert!(
+            snap.last_error.is_none(),
+            "a successful link clears the error"
+        );
         assert!(snap.connected);
     }
 
@@ -304,7 +307,10 @@ mod tests {
         s.on_disconnected();
         let snap = s.snapshot();
         assert!(!snap.connected);
-        assert!(snap.connected_since_ms.is_none(), "uptime folded into prior");
+        assert!(
+            snap.connected_since_ms.is_none(),
+            "uptime folded into prior"
+        );
         assert_eq!(snap.link_drops, 0, "a deliberate disconnect is not a drop");
         assert_eq!(snap.last_drop_reason.as_deref(), Some("disconnected"));
     }
