@@ -180,6 +180,48 @@ pub struct ActivityEntry {
     pub message: String,
 }
 
+/// Runtime connection statistics for one host (since the app started, across
+/// reconnects and manual disconnect/connect cycles).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnStats {
+    pub host_id: Uuid,
+    /// When these counters started (first time the host was touched).
+    pub since_ms: u64,
+    pub connected: bool,
+    /// Fresh sessions (epoch 1) that came up.
+    pub connects: u32,
+    /// Links re-established after a drop (epoch > 1).
+    pub reconnects: u32,
+    /// Times an established link died underneath us.
+    pub link_drops: u32,
+    /// Failed connect / reconnect attempts.
+    pub connect_failures: u32,
+    pub connected_since_ms: Option<u64>,
+    /// Connected time of links that already ended. The UI adds the live link
+    /// (`now - connected_since_ms`) so the total ticks without new events.
+    pub prior_uptime_ms: u64,
+    pub last_ip: Option<String>,
+    pub last_drop_at_ms: Option<u64>,
+    pub last_drop_reason: Option<String>,
+    /// Most recent connect/link error; cleared when a link comes up.
+    pub last_error: Option<String>,
+    pub tunnel_conns_total: u64,
+    pub tunnel_conns_active: u64,
+    /// direct-tcpip opens the remote refused.
+    pub tunnel_refused: u64,
+    /// Local connections dropped because the remote port never came up.
+    pub tunnel_wait_timeouts: u64,
+    /// local → remote bytes through tunnels
+    pub tunnel_bytes_up: u64,
+    /// remote → local bytes through tunnels
+    pub tunnel_bytes_down: u64,
+    pub scans: u64,
+    pub scan_failures: u64,
+    /// Duration of the most recent port scan (round trip over SSH).
+    pub last_scan_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthRequest {

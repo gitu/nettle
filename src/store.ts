@@ -7,6 +7,7 @@ import {
   type AuthRequest,
   type ConnectionSet,
   type ConnState,
+  type ConnStats,
   type DirListing,
   type ForwardsChanged,
   type HostConfig,
@@ -43,6 +44,8 @@ interface NettleState {
   focusedHostId: string | null;
   view: View;
   activity: ActivityEntry[];
+  /** per-host connection statistics; outlive sessions (kept for this app run) */
+  stats: Record<string, ConnStats>;
 
   // shared local file pane
   local: DirListing | null;
@@ -92,6 +95,7 @@ export const useStore = create<NettleState>((set, get) => ({
   focusedHostId: null,
   view: 'ports',
   activity: [],
+  stats: {},
 
   local: null,
   localSel: null,
@@ -289,6 +293,10 @@ export async function initStore() {
       set((s) => ({ activity: [...s.activity, e.payload].slice(-ACTIVITY_CAP) })),
     ),
 
+    listen<ConnStats>('conn-stats', (e) =>
+      set((s) => ({ stats: { ...s.stats, [e.payload.hostId]: e.payload } })),
+    ),
+
     listen<HostKeyPrompt>('host-key-prompt', (e) => set({ hostKeyPrompt: e.payload })),
     listen<HostKeyPrompt>('host-key-mismatch', (e) => set({ hostKeyMismatch: e.payload })),
     listen<AuthRequest>('auth-request', (e) => set({ authRequest: e.payload })),
@@ -304,12 +312,13 @@ export async function initStore() {
   ]);
 
   // hydrate
-  const [hosts, sets, settings, sessions, activity] = await Promise.all([
+  const [hosts, sets, settings, sessions, activity, statsList] = await Promise.all([
     api.listHosts(),
     api.listSets(),
     api.getSettings(),
     api.listSessions(),
     api.listActivity().catch(() => [] as ActivityEntry[]),
+    api.listConnStats().catch(() => [] as ConnStats[]),
   ]);
   const sessionMap: Record<string, SessionState> = {};
   for (const info of sessions) {
@@ -321,6 +330,11 @@ export async function initStore() {
     const merged = [...activity, ...s.activity.filter((a) => !seen.has(a.seq))].slice(
       -ACTIVITY_CAP,
     );
+    // A stats event that streamed in during hydration is newer than the
+    // snapshot: keep it.
+    const stats: Record<string, ConnStats> = {};
+    for (const st of statsList) stats[st.hostId] = st;
+    Object.assign(stats, s.stats);
     return {
       hosts,
       sets,
@@ -328,6 +342,7 @@ export async function initStore() {
       sessions: sessionMap,
       focusedHostId: Object.keys(sessionMap)[0] ?? null,
       activity: merged,
+      stats,
     };
   });
   for (const hostId of Object.keys(sessionMap)) {

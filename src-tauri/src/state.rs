@@ -65,6 +65,8 @@ pub struct UiBridge {
     pub forwards:
         StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::ForwardInfo>>>,
     activity: StdMutex<ActivityBuf>,
+    /// Per-host runtime connection statistics (outlive individual sessions).
+    pub stats: crate::stats::StatsHub,
 }
 
 /// Bounded in-memory activity log backing the in-app "activity" view.
@@ -86,7 +88,25 @@ impl UiBridge {
             ports: StdMutex::new(std::collections::HashMap::new()),
             forwards: StdMutex::new(std::collections::HashMap::new()),
             activity: StdMutex::new(ActivityBuf::default()),
+            stats: crate::stats::StatsHub::default(),
         })
+    }
+
+    /// Push a host's current statistics snapshot to the UI.
+    pub fn emit_stats(&self, host_id: uuid::Uuid) {
+        let snap = self.stats.get(host_id).snapshot();
+        self.emit("conn-stats", &snap);
+    }
+
+    /// Push the snapshot only if a counter changed since the last push.
+    /// Returns whether anything was emitted.
+    pub fn emit_stats_if_dirty(&self, host_id: uuid::Uuid) -> bool {
+        let stats = self.stats.get(host_id);
+        if !stats.take_dirty() {
+            return false;
+        }
+        self.emit("conn-stats", &stats.snapshot());
+        true
     }
 
     /// Append to the activity log and push the entry to the UI.
@@ -281,6 +301,8 @@ pub struct ActiveSession {
     pub forwards: Arc<ForwardManager>,
     pub actor_task: StdMutex<Option<JoinHandle<()>>>,
     pub scanner_task: StdMutex<Option<JoinHandle<()>>>,
+    /// Low-rate ticker that pushes changed connection stats to the UI.
+    pub stats_task: StdMutex<Option<JoinHandle<()>>>,
 }
 
 pub type Sessions = std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>;

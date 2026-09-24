@@ -1,6 +1,7 @@
 import { useStore } from '../store';
 import { shortDir } from '../util';
 import { openPortInBrowser } from '../openPort';
+import { ConnStatsStrip } from './ConnStatsStrip';
 
 interface Row {
   hostId: string;
@@ -112,6 +113,7 @@ export function DashboardView() {
                 {g.rows.length} tunnel{g.rows.length === 1 ? '' : 's'}
               </span>
             </div>
+            <ConnStatsStrip hostId={g.hostId} />
             {g.rows.length === 0 && (
               <div className="dash-empty">No tunnels — open one from this host's ports tab.</div>
             )}

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +36,7 @@ pub fn spawn(
     session_cmd: mpsc::UnboundedSender<SessionCmd>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let stats = ui.stats.get(host_id);
         loop {
             // Wait for a live epoch.
             let epoch: Arc<ConnectionEpoch> = loop {
@@ -59,10 +61,23 @@ pub fn spawn(
 
             loop {
                 let probe_method = method.is_none();
+                let started = std::time::Instant::now();
                 let scan = tokio::select! {
                     _ = epoch.cancel.cancelled() => break,
                     r = scan_once(&epoch, &mut method) => r,
                 };
+                match &scan {
+                    Ok(_) => {
+                        stats.scans.fetch_add(1, Ordering::Relaxed);
+                        stats
+                            .last_scan_ms
+                            .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    }
+                    Err(_) => {
+                        stats.scan_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                stats.touch();
                 if probe_method {
                     if let Some(m) = method {
                         let msg = match m {

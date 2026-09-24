@@ -22,12 +22,38 @@ export function fmtAgo(unixSecs: number | null | undefined): string {
 }
 
 export function fmtUptime(sinceMs: number, nowMs: number): string {
-  const s = Math.max(0, Math.floor((nowMs - sinceMs) / 1000));
+  return fmtDuration(nowMs - sinceMs);
+}
+
+/** `hh:mm:ss` for a duration in milliseconds (clamped at zero; hours grow
+ *  past 99 rather than wrapping). */
+export function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
   const pad = (x: number) => String(x).padStart(2, '0');
   return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+
+/** Compact duration for prose: `12s`, `4m`, `2h 05m`, `3d 04h`. */
+export function fmtDurationShort(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const pad = (x: number) => String(x).padStart(2, '0');
+  if (h < 24) return `${h}h ${pad(m % 60)}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${pad(h % 24)}h`;
+}
+
+/** Wall-clock time of day for a timestamp: `14:03:27`. */
+export function fmtClock(tsMs: number): string {
+  const d = new Date(tsMs);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 const EXT_META: Record<string, { tag: string; color: string }> = {

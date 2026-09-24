@@ -112,6 +112,18 @@ Port discovery execs `ss -tlnp` on the remote every 3 s (falling back to
 `netstat`, then `/proc/net/tcp`), diffs the result, and feeds both the UI and
 the forward manager. The parsers are pure functions with fixture tests.
 
+Tunnelled connections are pumped directly on the russh channel (no
+`into_stream` + `copy_bidirectional`): a remote `Close` ends the connection
+immediately, a half-closed connection may linger for at most 30 s, and every
+byte is accounted for.
+
+Each host keeps **connection statistics** for the app's runtime (`stats.rs`):
+links established, drops with their cause, failed attempts, connected time,
+tunnel connections/bytes, and port-scan health. They live on the `UiBridge`,
+so they survive reconnects and manual disconnects, and are pushed to the UI as
+`conn-stats` events at most once per second (and only when something changed).
+The dashboard shows them per host; the sidebar footer shows the essentials.
+
 The backend never touches the Tauri runtime directly — events go through an
 `EventSink` trait — so the entire SSH stack runs headless in integration tests.
 
@@ -121,6 +133,7 @@ src-tauri/src/
 ├── terminal.rs PTY channel with output coalescing
 ├── sftp/       browse session + concurrent transfer queue
 ├── ports/      scanner + parsers + forward manager
+├── stats.rs    per-host runtime connection statistics
 ├── web.rs      optional token-authorized HTTP control server (axum)
 └── ipc/        Tauri commands & typed event payloads
 src/            React UI (zustand store, xterm.js terminal)

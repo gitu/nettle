@@ -122,6 +122,34 @@ export interface HostKeyPrompt {
   fingerprint: string;
 }
 
+/** Runtime connection statistics for one host (since app start, across
+ *  reconnects and manual disconnect/connect cycles). */
+export interface ConnStats {
+  hostId: string;
+  sinceMs: number;
+  connected: boolean;
+  connects: number;
+  reconnects: number;
+  linkDrops: number;
+  connectFailures: number;
+  connectedSinceMs: number | null;
+  /** connected time of links that already ended; add `now - connectedSinceMs` for the total */
+  priorUptimeMs: number;
+  lastIp: string | null;
+  lastDropAtMs: number | null;
+  lastDropReason: string | null;
+  lastError: string | null;
+  tunnelConnsTotal: number;
+  tunnelConnsActive: number;
+  tunnelRefused: number;
+  tunnelWaitTimeouts: number;
+  tunnelBytesUp: number;
+  tunnelBytesDown: number;
+  scans: number;
+  scanFailures: number;
+  lastScanMs: number;
+}
+
 export interface AuthRequest {
   kind: 'password' | 'keyPassphrase';
   username: string;
@@ -217,6 +245,7 @@ export const api = {
 
   listActivity: () => invoke<ActivityEntry[]>('list_activity'),
   clearActivity: () => invoke<void>('clear_activity'),
+  listConnStats: () => invoke<ConnStats[]>('list_conn_stats'),
 
   windowControl: (action: 'close' | 'minimize' | 'maximize') =>
     invoke<void>('window_control', { action }),
