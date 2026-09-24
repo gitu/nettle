@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::config::{ConnectionSet, HostConfig, HostPort, Settings, WebConfig};
 use crate::error::{NettleError, Result};
 use crate::ipc::types::{
-    ActivityEntry, ConnState, DirListing, ForwardInfo, HostForward, LogLevel, SessionInfo,
-    TransferDirection, TransferMeta, TransferProgress,
+    ActivityEntry, ConnState, ConnStats, DirListing, ForwardInfo, HostForward, LogLevel,
+    SessionInfo, TransferDirection, TransferMeta, TransferProgress,
 };
 use crate::local_fs;
 use crate::ports::forwards::ForwardManager;
@@ -154,6 +154,20 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         let _ = forwards.set_with_local(port, local_port, true, true).await;
     }
 
+    // Stats change on hot paths (tunnel bytes); push them to the UI at a
+    // fixed low rate and only when something changed.
+    let stats_task = {
+        let ui = ui.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                ui.emit_stats_if_dirty(host_id);
+            }
+        })
+    };
+
     let session = Arc::new(ActiveSession {
         browser: SftpBrowser::new(epoch_rx.clone()),
         transfers: TransferManager::new(ui, host_id, epoch_rx.clone()),
@@ -164,6 +178,7 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         forwards,
         actor_task: StdMutex::new(Some(actor_task)),
         scanner_task: StdMutex::new(Some(scanner_task)),
+        stats_task: StdMutex::new(Some(stats_task)),
     });
     state.sessions.lock().await.insert(host_id, session);
     Ok(())
@@ -185,6 +200,15 @@ pub(crate) async fn teardown(state: &AppState, host_id: Uuid) {
         if let Some(scanner) = scanner {
             scanner.abort();
         }
+        let ticker = old.stats_task.lock().unwrap().take();
+        if let Some(ticker) = ticker {
+            ticker.abort();
+        }
+        // The actor folds the uptime on Disconnect; if it didn't get there in
+        // time this is a no-op for a link that already ended. Either way push
+        // a final snapshot so the UI shows the session as closed.
+        state.ui.stats.get(host_id).on_disconnected();
+        state.ui.emit_stats(host_id);
     }
     // Drop the cached UI state silently so a session torn down internally (e.g.
     // keep_connections=off) doesn't hydrate as a phantom session after a reload.
@@ -597,6 +621,13 @@ pub fn list_activity(state: State<'_, AppState>) -> Vec<ActivityEntry> {
 #[tauri::command]
 pub fn clear_activity(state: State<'_, AppState>) {
     state.ui.clear_activity();
+}
+
+/// Runtime connection statistics for every host touched since app start —
+/// the hydration counterpart of the `conn-stats` event.
+#[tauri::command]
+pub fn list_conn_stats(state: State<'_, AppState>) -> Vec<ConnStats> {
+    state.ui.stats.snapshot_all()
 }
 
 #[tauri::command]

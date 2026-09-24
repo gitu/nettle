@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::HostConfig;
 use crate::error::{NettleError, Result};
-use crate::ipc::types::ConnState;
+use crate::ipc::types::{ConnState, LogLevel};
 use crate::ssh::auth::{self, SecretCache};
 use crate::ssh::handler::ClientHandler;
 use crate::ssh::{dns, now_ms, ConnectionEpoch, EpochRx, EpochTx};
@@ -56,6 +56,7 @@ impl SessionActor {
         // Seed from the app-runtime vault so a host the user already unlocked
         // this run connects without prompting.
         let mut cache = vault.get(host.id);
+        let stats = ui.stats.get(host.id);
         let mut epoch_id: u64 = 0;
         let mut ever_connected = false;
         let mut attempt: u32 = 0;
@@ -108,6 +109,7 @@ impl SessionActor {
                         connected_at_ms: now_ms(),
                     });
                     let _ = epoch_tx.send(Some(epoch.clone()));
+                    stats.on_connected(&ip.to_string(), epoch_id);
                     ui.emit_conn(
                         host.id,
                         ConnState::Connected {
@@ -117,9 +119,10 @@ impl SessionActor {
                             epoch: epoch_id,
                         },
                     );
+                    ui.emit_stats(host.id);
 
                     // Supervise until the connection dies or the user disconnects.
-                    loop {
+                    let drop_reason: String = loop {
                         tokio::select! {
                             cmd = cmd_rx.recv() => match cmd {
                                 Some(SessionCmd::Disconnect) | None => {
@@ -129,23 +132,40 @@ impl SessionActor {
                                         .handle
                                         .disconnect(russh::Disconnect::ByApplication, "", "en")
                                         .await;
+                                    stats.on_disconnected();
+                                    ui.emit_stats(host.id);
                                     // The command layer emits the `disconnected`
                                     // state — the actor stays silent so a reconnect
                                     // (which tears the actor down) can't race a
                                     // stale disconnect event over the new session.
                                     break 'main;
                                 }
-                                Some(SessionCmd::SuspectDead(id)) if id == epoch_id => break,
+                                Some(SessionCmd::SuspectDead(id)) if id == epoch_id => {
+                                    break "a subsystem hit an I/O error on the link".to_string();
+                                }
                                 Some(SessionCmd::SuspectDead(_)) => {}
                             },
-                            _ = death_rx.recv() => break,
+                            reason = death_rx.recv() => break match reason {
+                                Some(reason) => reason,
+                                None => "the SSH session task ended".to_string(),
+                            },
                         }
-                    }
+                    };
                     // Connection died — tear down this epoch, fall through to reconnect.
                     cancel.cancel();
                     let _ = epoch_tx.send(None);
+                    stats.on_link_lost(&drop_reason);
+                    ui.log(
+                        LogLevel::Warn,
+                        Some(host.id),
+                        "conn",
+                        format!("link #{epoch_id} dropped: {drop_reason}"),
+                    );
+                    ui.emit_stats(host.id);
                 }
                 Err(err) => {
+                    stats.on_connect_failed(&err.to_string());
+                    ui.emit_stats(host.id);
                     if !ever_connected {
                         // Initial connect failed: report and stop; the user retries explicitly.
                         ui.emit_conn(
@@ -174,6 +194,8 @@ impl SessionActor {
                 _ = tokio::time::sleep(delay) => {}
                 cmd = cmd_rx.recv() => {
                     if matches!(cmd, Some(SessionCmd::Disconnect) | None) {
+                        stats.on_disconnected();
+                        ui.emit_stats(host.id);
                         break 'main;
                     }
                 }

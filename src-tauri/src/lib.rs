@@ -6,6 +6,7 @@ pub mod ports;
 pub mod sftp;
 pub mod ssh;
 pub mod state;
+pub mod stats;
 pub mod terminal;
 pub mod tray;
 pub mod web;
@@ -78,6 +79,7 @@ pub fn run() {
             commands::port_kill_remote,
             commands::list_activity,
             commands::clear_activity,
+            commands::list_conn_stats,
             commands::window_control,
             commands::get_web_config,
             commands::set_web_config,

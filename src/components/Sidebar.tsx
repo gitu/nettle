@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { api } from '../ipc';
-import { fmtUptime } from '../util';
+import { fmtBytes, fmtUptime } from '../util';
 
 export function Sidebar() {
   const hosts = useStore((s) => s.hosts);
@@ -30,6 +30,7 @@ export function Sidebar() {
 
   const focused = focusedHostId ? sessions[focusedHostId] : null;
   const focusedHost = hosts.find((h) => h.id === focusedHostId) ?? null;
+  const stats = useStore((s) => (focusedHostId ? (s.stats[focusedHostId] ?? null) : null));
   const conn = focused?.conn;
   const isSession = conn?.state === 'connected' || conn?.state === 'reconnecting';
   const forwards = focused?.forwards ?? [];
@@ -237,6 +238,20 @@ export function Sidebar() {
             >
               ⚙
             </button>
+          </div>
+        )}
+        {isSession && stats && (
+          <div className="foot-row" title="tunnel traffic and link drops since the app started">
+            <span className="foot-note">
+              ↑ {fmtBytes(stats.tunnelBytesUp)} · ↓ {fmtBytes(stats.tunnelBytesDown)}
+              {stats.tunnelConnsActive > 0 ? ` · ${stats.tunnelConnsActive} open` : ''}
+            </span>
+            <span className="flex-1" />
+            <span className={`foot-note${stats.linkDrops > 0 ? ' warn' : ''}`}>
+              {stats.linkDrops === 0
+                ? 'no drops'
+                : `${stats.linkDrops} drop${stats.linkDrops === 1 ? '' : 's'}`}
+            </span>
           </div>
         )}
         {focused?.connError && (

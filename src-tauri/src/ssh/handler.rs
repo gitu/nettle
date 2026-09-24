@@ -39,7 +39,14 @@ impl client::Handler for ClientHandler {
         &mut self,
         reason: client::DisconnectReason<Self::Error>,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        let _ = self.death_tx.send(format!("{reason:?}"));
+        // Human-readable cause for the activity log and the connection stats.
+        let cause = match &reason {
+            client::DisconnectReason::ReceivedDisconnect(_) => {
+                "the server closed the connection".to_string()
+            }
+            client::DisconnectReason::Error(e) => format!("connection error: {e}"),
+        };
+        let _ = self.death_tx.send(cause);
         async move {
             match reason {
                 client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),

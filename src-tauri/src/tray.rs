@@ -1,7 +1,20 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
+
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime, WindowEvent};
 use uuid::Uuid;
+
+/// Coalescing window for menu rebuilds. A single port-scan diff fires both
+/// `ports-changed` and `forwards-changed`, reconnect attempts fire
+/// `connection-state` every few seconds, and each rebuild constructs a fresh
+/// native menu on the main thread — so bursts are folded into one rebuild.
+const REBUILD_DEBOUNCE: Duration = Duration::from_millis(300);
+static REBUILD_PENDING: AtomicBool = AtomicBool::new(false);
+/// What the tray currently shows; identical snapshots skip the native rebuild.
+static LAST_ROWS: Mutex<Option<Vec<HostRow>>> = Mutex::new(None);
 
 use crate::ipc::commands;
 use crate::ipc::types::ConnState;
@@ -38,7 +51,7 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
 
     // Populate the menu now, and rebuild it whenever hosts, connection state,
     // ports, or forwards change.
-    rebuild(app.handle());
+    rebuild_now(app.handle());
     for event in [
         "connection-state",
         "ports-changed",
@@ -46,7 +59,7 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         "hosts-changed",
     ] {
         let handle = app.handle().clone();
-        app.listen(event, move |_| rebuild(&handle));
+        app.listen(event, move |_| schedule_rebuild(&handle));
     }
 
     Ok(())
@@ -55,6 +68,7 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
 // ---------- dynamic menu ----------
 
 /// Send-safe snapshot of one host for building the menu on the main thread.
+#[derive(PartialEq, Eq)]
 struct HostRow {
     id: Uuid,
     name: String,
@@ -64,16 +78,30 @@ struct HostRow {
     forward_count: usize,
 }
 
+#[derive(PartialEq, Eq)]
 struct PortRow {
     port: u16,
     process: Option<String>,
     forwarded: bool,
 }
 
+/// Request a rebuild; bursts within `REBUILD_DEBOUNCE` collapse into one.
+fn schedule_rebuild<R: Runtime>(app: &AppHandle<R>) {
+    if REBUILD_PENDING.swap(true, Ordering::AcqRel) {
+        return; // one is already queued and will pick up the latest state
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(REBUILD_DEBOUNCE).await;
+        REBUILD_PENDING.store(false, Ordering::Release);
+        rebuild_now(&handle);
+    });
+}
+
 /// Gather host state synchronously from the sync snapshots on `UiBridge`
 /// (plus the persisted host list), then rebuild + apply the menu on the main
-/// thread.
-fn rebuild<R: Runtime>(app: &AppHandle<R>) {
+/// thread — unless nothing the menu shows has changed.
+fn rebuild_now<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -125,10 +153,19 @@ fn rebuild<R: Runtime>(app: &AppHandle<R>) {
             })
             .collect();
 
+        {
+            let mut last = LAST_ROWS.lock().unwrap();
+            if last.as_ref() == Some(&rows) {
+                return;
+            }
+            *last = None; // set once the native menu is actually applied
+        }
+
         let tunnels: usize = rows.iter().map(|r| r.forward_count).sum();
         let call_handle = handle.clone();
         let _ = call_handle.run_on_main_thread(move || {
             if let Ok(menu) = build_menu(&handle, &rows) {
+                *LAST_ROWS.lock().unwrap() = Some(rows);
                 if let Some(tray) = handle.tray_by_id("nettle-tray") {
                     let _ = tray.set_menu(Some(menu));
                     #[cfg(target_os = "macos")]

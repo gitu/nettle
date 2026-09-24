@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use russh::ChannelMsg;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -12,10 +15,18 @@ use crate::error::{NettleError, Result};
 use crate::ipc::types::{ForwardInfo, LogLevel};
 use crate::ssh::EpochRx;
 use crate::state::UiBridge;
+use crate::stats::{ActiveTunnelGuard, HostStats};
 
 /// Grace period for holding an accepted local connection while the remote
 /// process (or the SSH link) comes back.
 const WAIT_GRACE: Duration = Duration::from_secs(20);
+/// After one side of a tunnelled connection hit EOF, how long the other side
+/// may keep it open before we tear the whole thing down.
+const HALF_CLOSE_LINGER: Duration = Duration::from_secs(30);
+/// Pause after a failed accept() before trying again.
+const ACCEPT_RETRY: Duration = Duration::from_millis(250);
+/// Read chunk for local → remote; matches the usual SSH max packet payload.
+const PROXY_BUF: usize = 32 * 1024;
 
 struct Entry {
     local_port: u16,
@@ -212,16 +223,36 @@ impl ForwardManager {
     ) {
         let mgr = self.clone();
         tokio::spawn(async move {
+            // accept() errors are usually transient (EMFILE, ECONNABORTED,
+            // ENOBUFS); giving up would silently kill the tunnel. Back off a
+            // little and keep serving, logging the first failure only.
+            let mut logged_error = false;
             loop {
                 tokio::select! {
                     _ = stop.cancelled() => break,
-                    accepted = listener.accept() => {
-                        let Ok((sock, peer)) = accepted else { break };
-                        let conn_stop = stop.child_token();
-                        let mgr = mgr.clone();
-                        tokio::spawn(async move {
-                            let _ = proxy(&mgr, sock, peer, port, conn_stop).await;
-                        });
+                    accepted = listener.accept() => match accepted {
+                        Ok((sock, peer)) => {
+                            let conn_stop = stop.child_token();
+                            let mgr = mgr.clone();
+                            tokio::spawn(async move {
+                                let _ = proxy(&mgr, sock, peer, port, conn_stop).await;
+                            });
+                        }
+                        Err(e) => {
+                            if !logged_error {
+                                logged_error = true;
+                                mgr.ui.log(
+                                    LogLevel::Warn,
+                                    Some(mgr.host_id),
+                                    "forward",
+                                    format!("forward {port}: accept failed ({e}); retrying"),
+                                );
+                            }
+                            tokio::select! {
+                                _ = stop.cancelled() => break,
+                                _ = tokio::time::sleep(ACCEPT_RETRY) => {}
+                            }
+                        }
                     }
                 }
             }
@@ -269,6 +300,7 @@ async fn proxy(
     port: u16,
     stop: CancellationToken,
 ) -> Result<()> {
+    let stats = mgr.ui.stats.get(mgr.host_id);
     let mut epoch_rx = mgr.epoch_rx.clone();
     let mut live_rx = mgr.ports_live_rx.clone();
     // Wait (bounded) for a live epoch AND the remote port to be listening.
@@ -283,7 +315,11 @@ async fn proxy(
         }
         tokio::select! {
             _ = stop.cancelled() => return Ok(()),
-            _ = tokio::time::sleep_until(deadline) => return Ok(()),
+            _ = tokio::time::sleep_until(deadline) => {
+                stats.tunnel_wait_timeouts.fetch_add(1, Ordering::Relaxed);
+                stats.touch();
+                return Ok(());
+            }
             r = epoch_rx.changed() => { if r.is_err() { return Ok(()); } }
             r = live_rx.changed() => { if r.is_err() { return Ok(()); } }
         }
@@ -299,6 +335,8 @@ async fn proxy(
     {
         Ok(c) => c,
         Err(e) => {
+            stats.tunnel_refused.fetch_add(1, Ordering::Relaxed);
+            stats.touch();
             mgr.ui.log(
                 LogLevel::Warn,
                 Some(mgr.host_id),
@@ -308,12 +346,90 @@ async fn proxy(
             return Err(e);
         }
     };
-    let mut stream = channel.into_stream();
 
-    tokio::select! {
-        _ = stop.cancelled() => {}
-        _ = epoch.cancel.cancelled() => {}
-        _ = tokio::io::copy_bidirectional(&mut sock, &mut stream) => {}
-    }
+    let _slot = ActiveTunnelGuard::acquire(stats.clone());
+    pump(&mut sock, channel, &stats, &stop, &epoch.cancel).await;
     Ok(())
+}
+
+/// Shovel bytes between a local socket and an SSH channel until both sides
+/// are done, the forward is removed, or the link dies.
+///
+/// This drives the channel directly (`wait()` / `data()`) instead of going
+/// through `Channel::into_stream()` + `copy_bidirectional`: it gives exact
+/// byte accounting for the connection stats, treats a remote `Close` as the
+/// end of the connection (a closed channel can never carry data again, so
+/// there is nothing to wait for), and bounds how long a half-closed
+/// connection may linger — keep-alive clients that never close their end
+/// used to pin a task and a socket per connection indefinitely.
+async fn pump(
+    sock: &mut tokio::net::TcpStream,
+    mut channel: russh::Channel<russh::client::Msg>,
+    stats: &HostStats,
+    stop: &CancellationToken,
+    link_down: &CancellationToken,
+) {
+    let (mut rd, mut wr) = sock.split();
+    let mut buf = vec![0u8; PROXY_BUF];
+    // Direction state: once a side signalled EOF we stop reading from it.
+    let mut local_eof = false;
+    let mut remote_eof = false;
+    let far_future = tokio::time::Instant::now() + Duration::from_secs(365 * 24 * 3600);
+    let mut linger_until = far_future;
+
+    loop {
+        if local_eof && remote_eof {
+            break;
+        }
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            _ = link_down.cancelled() => break,
+            _ = tokio::time::sleep_until(linger_until) => break,
+            r = rd.read(&mut buf), if !local_eof => match r {
+                Ok(0) | Err(_) => {
+                    local_eof = true;
+                    linger_until = tokio::time::Instant::now() + HALF_CLOSE_LINGER;
+                    let _ = channel.eof().await;
+                }
+                Ok(n) => {
+                    // `data()` honours the SSH window; race it against the
+                    // link so a stalled window on a dead link can't hang us.
+                    let sent = tokio::select! {
+                        _ = stop.cancelled() => false,
+                        _ = link_down.cancelled() => false,
+                        r = channel.data(&buf[..n]) => r.is_ok(),
+                    };
+                    if !sent {
+                        break;
+                    }
+                    stats.add_tunnel_bytes(n as u64, 0);
+                }
+            },
+            msg = channel.wait(), if !remote_eof => match msg {
+                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    let written = tokio::select! {
+                        _ = stop.cancelled() => false,
+                        _ = link_down.cancelled() => false,
+                        r = wr.write_all(&data[..]) => r.is_ok(),
+                    };
+                    if !written {
+                        break;
+                    }
+                    stats.add_tunnel_bytes(0, data.len() as u64);
+                }
+                Some(ChannelMsg::Eof) => {
+                    remote_eof = true;
+                    linger_until = tokio::time::Instant::now() + HALF_CLOSE_LINGER;
+                    let _ = wr.shutdown().await;
+                }
+                // Channel gone (or the session dropped it): nothing can flow
+                // in either direction any more.
+                Some(ChannelMsg::Close) | None => break,
+                Some(_) => {}
+            },
+        }
+    }
+    // Best effort: tell the remote we're done. Errors (link already gone)
+    // don't matter; dropping the channel closes it anyway.
+    let _ = channel.close().await;
 }
