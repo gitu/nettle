@@ -9,12 +9,10 @@ updates:
       time: '07:00'
     open-pull-requests-limit: 10
     groups:
-      # One PR for routine minor/patch bumps to keep the noise down; majors
-      # still come as individual PRs so they get a proper look.
-      npm-minor-patch:
-        update-types:
-          - minor
-          - patch
+      # Everything (majors included) in a single PR per ecosystem.
+      npm:
+        patterns:
+          - '*'
 
   # Rust backend (Cargo manifest lives in src-tauri)
   - package-ecosystem: cargo
@@ -25,10 +23,9 @@ updates:
       time: '07:00'
     open-pull-requests-limit: 10
     groups:
-      cargo-minor-patch:
-        update-types:
-          - minor
-          - patch
+      cargo:
+        patterns:
+          - '*'
 
   # GitHub Actions used by the CI / release / CodeQL workflows
   - package-ecosystem: github-actions
