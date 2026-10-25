@@ -66,6 +66,14 @@ scoop bucket add gitu https://github.com/gitu/homebrew-tap
 scoop install nettle
 ```
 
+**Debian / Ubuntu (APT):**
+
+```sh
+curl -fsSL https://gitu.github.io/nettle/apt/nettle.gpg | sudo tee /usr/share/keyrings/nettle.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/nettle.gpg] https://gitu.github.io/nettle/apt stable main" | sudo tee /etc/apt/sources.list.d/nettle.list
+sudo apt update && sudo apt install nettle
+```
+
 Or grab the latest build from [Releases](https://github.com/gitu/nettle/releases):
 `.dmg` for macOS (Apple Silicon and Intel), `.AppImage` / `.deb` / `.rpm` for
 Linux, `.msi` / `.exe` for Windows.
@@ -208,6 +216,9 @@ the frontend build) on every push; tagging `v*` builds and publishes installers
 for all three platforms and updates the Homebrew cask (macOS + Linux) and Scoop manifest (Windows) from
 `packaging/*.tmpl` (needs the
 `HOMEBREW_TAP_TOKEN` secret — a PAT with write access to `gitu/homebrew-tap`).
+It also publishes a signed APT repository to the `gh-pages` branch (needs
+`APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` secrets, and GitHub Pages enabled
+for `gh-pages`).
 
 To release, push a `vX.Y.Z` tag on `main` — nothing else. The release workflow
 injects the version from the tag into `tauri.conf.json` before building, so the
