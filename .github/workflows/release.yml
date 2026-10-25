@@ -142,19 +142,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          mkdir assets && cd assets
+          # not "assets": that directory already exists in the repo (screenshots)
+          mkdir release-files
           gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
-            -p '*.dmg' -p '*.AppImage' -p '*.msi'
+            -D release-files -p '*.dmg' -p '*.AppImage' -p '*.msi'
           sum() { sha256sum "$1" | cut -d' ' -f1; }
-          cd ..
           mkdir -p tap/Casks tap/bucket
           render() {
             sed \
               -e "s/@VERSION@/$VERSION/g" \
-              -e "s/@SHA_MAC_ARM@/$(sum assets/nettle_${VERSION}_aarch64.dmg)/" \
-              -e "s/@SHA_MAC_INTEL@/$(sum assets/nettle_${VERSION}_x64.dmg)/" \
-              -e "s/@SHA_LINUX@/$(sum assets/nettle_${VERSION}_amd64.AppImage)/" \
-              -e "s/@SHA_WIN@/$(sum assets/nettle_${VERSION}_x64_en-US.msi)/" \
+              -e "s/@SHA_MAC_ARM@/$(sum release-files/nettle_${VERSION}_aarch64.dmg)/" \
+              -e "s/@SHA_MAC_INTEL@/$(sum release-files/nettle_${VERSION}_x64.dmg)/" \
+              -e "s/@SHA_LINUX@/$(sum release-files/nettle_${VERSION}_amd64.AppImage)/" \
+              -e "s/@SHA_WIN@/$(sum release-files/nettle_${VERSION}_x64_en-US.msi)/" \
               "$1"
           }
           render packaging/nettle.rb.tmpl > tap/Casks/nettle.rb
@@ -169,3 +169,64 @@ jobs:
           git add Casks/nettle.rb bucket/nettle.json
           git diff --cached --quiet || git commit -m "nettle ${GITHUB_REF_NAME#v}"
           git push
+
+  apt:
+    name: Publish APT repository
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check for signing key
+        id: key
+        run: echo "have=${{ secrets.APT_GPG_PRIVATE_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      # The repo lives on the gh-pages branch (served at https://gitu.github.io/nettle/apt).
+      # It is created on the first release; each release adds its .deb to pool/
+      # and regenerates the signed indexes.
+      - name: Checkout gh-pages
+        if: steps.key.outputs.have == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: pages
+        continue-on-error: true
+
+      - name: Build and sign repository
+        if: steps.key.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y dpkg-dev apt-utils
+          if [ ! -d pages/.git ]; then
+            rm -rf pages && mkdir pages && git -C pages init -q -b gh-pages
+            git -C pages remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          cd pages/
+          mkdir -p apt/pool apt/dists/stable/main/binary-amd64
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p '*.deb' -D apt/pool
+          cd apt
+          dpkg-scanpackages --multiversion pool > dists/stable/main/binary-amd64/Packages
+          gzip -kf dists/stable/main/binary-amd64/Packages
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin=nettle \
+            -o APT::FTPArchive::Release::Suite=stable \
+            -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=amd64 \
+            -o APT::FTPArchive::Release::Components=main \
+            release dists/stable > dists/stable/Release
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          GPG=(gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE")
+          "${GPG[@]}" --clearsign -o dists/stable/InRelease dists/stable/Release
+          "${GPG[@]}" -abs -o dists/stable/Release.gpg dists/stable/Release
+          gpg --batch --export > nettle.gpg
+          cd ..
+          touch .nojekyll
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "apt: nettle ${GITHUB_REF_NAME#v}"
+          git push origin HEAD:gh-pages
