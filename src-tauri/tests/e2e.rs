@@ -27,7 +27,8 @@ use uuid::Uuid;
 
 use nettle_lib::config::{ConfigStore, HostConfig};
 use nettle_lib::ipc::types::{TransferDirection, TransferStatus};
-use nettle_lib::ports::forwards::ForwardManager;
+use nettle_lib::ports::forwards::{ForwardManager, Target};
+use nettle_lib::ports::sandbox;
 use nettle_lib::sftp::browse::SftpBrowser;
 use nettle_lib::sftp::transfers::TransferManager;
 use nettle_lib::ssh::session::{SessionActor, SessionCmd};
@@ -395,6 +396,7 @@ async fn forward_tunnel_to_remote_sshd() {
         h.store.clone(),
         h.epoch_rx.clone(),
         live_rx,
+        watch::channel(Default::default()).1,
     );
     forwards
         .set_with_local(remote_port, local_port, true, false)
@@ -486,6 +488,7 @@ async fn changing_local_port_rebinds_the_forward() {
         h.store.clone(),
         h.epoch_rx.clone(),
         live_rx,
+        watch::channel(Default::default()).1,
     );
 
     // Forward remote sshd → first local port.
@@ -531,6 +534,131 @@ async fn changing_local_port_rebinds_the_forward() {
         "old local port should no longer tunnel after retarget"
     );
 
+    drop(live_tx);
+    forwards.shutdown();
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
+/// A stand-in `sbx` for the test sshd: `ls` reports one running sandbox, and
+/// `exec` runs the command on the host itself after a marker line, so a tunnel
+/// through the sandbox bridge is told apart from a direct one by its first bytes.
+const FAKE_SBX: &str = r#"#!/bin/sh
+case "$1" in
+  ls) echo '[{"name":"sb-a","agent":"shell","status":"running","workspaces":["/w"]}]' ;;
+  exec)
+    shift
+    [ "$1" = -i ] && shift
+    shift
+    echo via-sbx
+    exec "$@" ;;
+  *) exit 2 ;;
+esac
+"#;
+
+#[tokio::test]
+async fn local_port_switches_between_host_and_sandbox() {
+    if !enabled() {
+        return;
+    }
+    let mut h = connect().await;
+    let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
+    let install = format!(
+        "mkdir -p ~/.local/bin && cat > ~/.local/bin/sbx <<'EOF'\n{FAKE_SBX}EOF\nchmod +x ~/.local/bin/sbx"
+    );
+    let (_, exit) = exec_capture(&epoch.handle, &install)
+        .await
+        .expect("install fake sbx");
+    assert_eq!(exit, Some(0));
+
+    let remote_port: u16 = env_or("NETTLE_E2E_REMOTE_SSH_PORT", "2222")
+        .parse()
+        .unwrap();
+    let local_port: u16 = 43240;
+
+    let (live_tx, live_rx) = watch::channel(HashSet::from([remote_port]));
+    let (sbx_tx, sbx_rx) = watch::channel(Default::default());
+    let forwards = ForwardManager::new(
+        h.ui.clone(),
+        h.host.id,
+        h.store.clone(),
+        h.epoch_rx.clone(),
+        live_rx,
+        sbx_rx,
+    );
+    let scanner = sandbox::spawn(
+        h.ui.clone(),
+        h.host.id,
+        h.epoch_rx.clone(),
+        forwards.clone(),
+        sbx_tx,
+    );
+
+    // The host's sshd on a local port.
+    forwards
+        .set_target(Target::host(remote_port), local_port, true, true)
+        .await
+        .expect("forward host port");
+    assert!(banner_through(local_port).await.starts_with("SSH-2.0"));
+
+    // An open connection to the host target, cut by the switch below.
+    let mut held = tokio::net::TcpStream::connect(("127.0.0.1", local_port))
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; 64];
+    let n = held.read(&mut buf).await.unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).starts_with("SSH-2.0"));
+
+    // Same local port, now into the sandbox: switched in place, pin follows.
+    let sb = Target {
+        sandbox: Some("sb-a".into()),
+        port: remote_port,
+    };
+    forwards
+        .set_target(sb.clone(), local_port, true, false)
+        .await
+        .expect("switch to sandbox");
+    let listed = forwards.list();
+    assert_eq!(listed.len(), 1, "one listener, retargeted");
+    assert_eq!(listed[0].sandbox.as_deref(), Some("sb-a"));
+    assert!(listed[0].pinned, "the pin follows the switch");
+    let pins = h.store.load_state().await.pinned_forwards;
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].sandbox.as_deref(), Some("sb-a"));
+
+    let closed = tokio::time::timeout(Duration::from_secs(5), held.read(&mut buf)).await;
+    assert!(
+        matches!(closed, Ok(Ok(0)) | Ok(Err(_))),
+        "connections to the old target end on switch"
+    );
+
+    // Goes through `sbx exec -i sb-a … socat/nc` once the scanner saw the port.
+    let banner = banner_through(local_port).await;
+    assert!(banner.starts_with("via-sbx"), "got {banner:?}");
+    let sandboxes = h.ui.sandboxes.lock().unwrap().get(&h.host.id).cloned();
+    let sandboxes = sandboxes.expect("sandboxes-changed emitted");
+    assert!(sandboxes.available);
+    assert_eq!(sandboxes.sandboxes[0].name, "sb-a");
+    assert!(sandboxes.sandboxes[0]
+        .ports
+        .iter()
+        .any(|p| p.port == remote_port));
+
+    // And back to the host.
+    forwards
+        .set_target(Target::host(remote_port), local_port, true, true)
+        .await
+        .expect("switch back");
+    assert!(banner_through(local_port).await.starts_with("SSH-2.0"));
+
+    forwards
+        .set_target(Target::host(remote_port), 0, false, false)
+        .await
+        .unwrap();
+    assert!(forwards.list().is_empty());
+    assert!(h.store.load_state().await.pinned_forwards.is_empty());
+
+    let _ = exec_capture(&epoch.handle, "rm -f ~/.local/bin/sbx").await;
+    scanner.abort();
     drop(live_tx);
     forwards.shutdown();
     h.cmd_tx.send(SessionCmd::Disconnect).unwrap();

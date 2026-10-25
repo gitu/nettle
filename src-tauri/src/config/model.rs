@@ -85,13 +85,16 @@ pub fn new_web_token() -> String {
 /// A pinned local→remote tunnel that is re-created on every connect. Older
 /// state files stored only `{hostId, port}`; those deserialize with
 /// `localPort` defaulting to 0, which `local_port()` reads as "same as remote".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedForward {
     pub host_id: Uuid,
     pub port: u16,
     #[serde(default)]
     pub local_port: u16,
+    /// Docker sandbox on the host the port lives in; absent = the host itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
 }
 
 impl PinnedForward {
@@ -177,11 +180,20 @@ mod tests {
     fn state_file_round_trips_sets_and_settings() {
         let host = Uuid::new_v4();
         let state = StateFile {
-            pinned_forwards: vec![PinnedForward {
-                host_id: host,
-                port: 8080,
-                local_port: 9090,
-            }],
+            pinned_forwards: vec![
+                PinnedForward {
+                    host_id: host,
+                    port: 8080,
+                    local_port: 9090,
+                    sandbox: None,
+                },
+                PinnedForward {
+                    host_id: host,
+                    port: 4180,
+                    local_port: 4180,
+                    sandbox: Some("claude-a".into()),
+                },
+            ],
             ignored_ports: vec![],
             settings: Settings {
                 keep_connections: false,
@@ -195,9 +207,11 @@ mod tests {
         };
         let json = serde_json::to_vec(&state).unwrap();
         let back: StateFile = serde_json::from_slice(&json).unwrap();
-        assert_eq!(back.pinned_forwards.len(), 1);
+        assert_eq!(back.pinned_forwards.len(), 2);
         assert_eq!(back.pinned_forwards[0].port, 8080);
         assert_eq!(back.pinned_forwards[0].local_port(), 9090);
+        assert_eq!(back.pinned_forwards[0].sandbox, None);
+        assert_eq!(back.pinned_forwards[1].sandbox.as_deref(), Some("claude-a"));
         assert!(!back.settings.keep_connections);
         assert_eq!(back.sets.len(), 1);
         assert_eq!(back.sets[0].name, "dev");
@@ -213,6 +227,7 @@ mod tests {
         let pin: PinnedForward = serde_json::from_str(&json).unwrap();
         assert_eq!(pin.local_port, 0);
         assert_eq!(pin.local_port(), 3000);
+        assert_eq!(pin.sandbox, None);
     }
 
     #[test]
@@ -249,6 +264,7 @@ mod tests {
             host_id: Uuid::new_v4(),
             port: 8080,
             local_port: 9090,
+            sandbox: None,
         };
         assert_eq!(pin.local_port(), 9090);
     }

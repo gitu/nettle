@@ -130,6 +130,7 @@ mod tests {
                     host_id: host,
                     port: 3000,
                     local_port: 0,
+                    sandbox: None,
                 });
             })
             .await

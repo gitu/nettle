@@ -58,16 +58,12 @@ pub async fn channel_open_loopback(
     }
 }
 
-/// Best-effort detection of what a remote loopback port is serving. Opens a
-/// direct-tcpip channel to the loopback port, sends a plaintext HTTP request and
+/// Best-effort detection of what a remote port is serving. Over a channel to
+/// the port (direct-tcpip, or a sandbox bridge), sends a plaintext HTTP request and
 /// inspects the first response bytes: an HTTPS server rejects the cleartext
 /// request with a TLS record (handshake 0x16 / alert 0x15, version 0x03xx),
 /// while an HTTP server answers `HTTP/…`. Defaults to `"http"` when ambiguous.
-pub async fn probe_http_scheme(
-    handle: &client::Handle<ClientHandler>,
-    port: u16,
-) -> Result<&'static str> {
-    let channel = channel_open_loopback(handle, port, "127.0.0.1", 0).await?;
+pub async fn probe_http_scheme(channel: russh::Channel<client::Msg>) -> Result<&'static str> {
     let mut stream = channel.into_stream();
     stream
         .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n")
