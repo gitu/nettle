@@ -22,7 +22,7 @@ tauri = { version = "2", features = ["image-png", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 russh = "0.64.1"
-russh-sftp = "2.3.0"
+russh-sftp = "3.0.1"
 tokio = { version = "1.52.3", features = ["full"] }
 thiserror = "2.0.18"
 tokio-util = "0.7.18"
