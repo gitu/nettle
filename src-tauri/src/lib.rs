@@ -73,6 +73,7 @@ pub fn run() {
             commands::transfer_clear_finished,
             commands::forward_set,
             commands::forward_list,
+            commands::list_sandboxes,
             commands::probe_port_scheme,
             commands::all_forwards,
             commands::port_ignore,

@@ -75,6 +75,10 @@ jobs:
           # the image ships with AllowTcpForwarding no — the tunnel test needs it
           docker exec nettle-sshd sed -i \
             's/^AllowTcpForwarding no/AllowTcpForwarding yes/' /config/sshd/sshd_config
+          # the tunnel tests open many connections that never authenticate
+          # (banner checks); don't let sshd's per-source penalties drop them
+          docker exec nettle-sshd sh -c \
+            'printf "PerSourcePenalties no\nMaxStartups 100\n" >> /config/sshd/sshd_config'
           docker exec nettle-sshd sh -c 'kill -HUP $(cat /config/sshd.pid)'
           sleep 2
 

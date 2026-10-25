@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import type { ForwardInfo, RemotePort } from '../ipc';
+import type { ForwardInfo, RemotePort, SandboxInfo } from '../ipc';
 import { shortDir } from '../util';
 import { openPortInBrowser } from '../openPort';
 
 /** Two-step kill control for the process behind a remote port: first click asks
  *  for confirmation, then offers a graceful SIGTERM or a hard SIGKILL. */
-function KillButton({ hostId, port, pid }: { hostId: string; port: number; pid: number | null }) {
+function KillButton({
+  hostId,
+  port,
+  pid,
+  sandbox,
+}: {
+  hostId: string;
+  port: number;
+  pid: number | null;
+  sandbox: string | null;
+}) {
   const [confirming, setConfirming] = useState(false);
   const killRemote = useStore((s) => s.killRemote);
 
@@ -30,7 +40,7 @@ function KillButton({ hostId, port, pid }: { hostId: string; port: number; pid: 
   }
   const fire = (force: boolean) => {
     setConfirming(false);
-    killRemote(hostId, port, pid, force);
+    killRemote(hostId, port, pid, force, sandbox);
   };
   return (
     <span className="kill-confirm">
@@ -53,10 +63,12 @@ function LocalTunnel({
   hostId,
   port,
   fwd,
+  sandbox,
 }: {
   hostId: string;
   port: number;
   fwd: ForwardInfo | null;
+  sandbox: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState('');
@@ -68,7 +80,7 @@ function LocalTunnel({
     const next = parseInt(value, 10);
     setEditing(false);
     if (Number.isInteger(next) && next > 0 && next < 65536 && next !== fwd.localPort) {
-      setForward(hostId, port, true, fwd.pinned, next);
+      setForward(hostId, port, true, fwd.pinned, next, sandbox);
     }
   };
 
@@ -111,7 +123,7 @@ function LocalTunnel({
 
 /** Manually forward an arbitrary remote port (the scanner may not see it, or
  *  you may want it bound to a specific local port). */
-function AddForward({ hostId }: { hostId: string }) {
+function AddForward({ hostId, sandbox }: { hostId: string; sandbox: string | null }) {
   const [remote, setRemote] = useState('');
   const [local, setLocal] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -128,7 +140,7 @@ function AddForward({ hostId }: { hostId: string }) {
       setError('local port must be 1–65535');
       return;
     }
-    setForward(hostId, rp, true, false, lp);
+    setForward(hostId, rp, true, false, lp, sandbox);
     setRemote('');
     setLocal('');
     setError(null);
@@ -136,7 +148,9 @@ function AddForward({ hostId }: { hostId: string }) {
 
   return (
     <div className="add-fwd">
-      <span className="add-fwd-label">forward a port</span>
+      <span className="add-fwd-label">
+        {sandbox ? `forward a port of ${sandbox}` : 'forward a port'}
+      </span>
       <input
         className="port-input"
         type="number"
@@ -166,6 +180,57 @@ function AddForward({ hostId }: { hostId: string }) {
   );
 }
 
+/** Host ↔ sandbox switcher: the host's Docker sandboxes (`sbx ls`), each with
+ *  the local ports currently tunnelled into it. */
+function SandboxBar({
+  hostId,
+  target,
+  sandboxes,
+  forwards,
+}: {
+  hostId: string;
+  target: string | null;
+  sandboxes: SandboxInfo[];
+  forwards: ForwardInfo[];
+}) {
+  const setPortsTarget = useStore((s) => s.setPortsTarget);
+  const locals = (sandbox: string | null) =>
+    forwards
+      .filter((f) => f.sandbox === sandbox)
+      .map((f) => `:${f.localPort}`)
+      .join(' ');
+  const chip = (sandbox: string | null, label: string, title: string, running: boolean) => {
+    const tunnels = locals(sandbox);
+    return (
+      <button
+        key={sandbox ?? ''}
+        className={`sbx-chip${target === sandbox ? ' active' : ''}`}
+        title={title}
+        onClick={() => setPortsTarget(hostId, sandbox)}
+      >
+        <span className={`pdot${running ? ' live' : ''}`} />
+        {label}
+        {tunnels && <span className="sbx-tunnels">→ {tunnels}</span>}
+      </button>
+    );
+  };
+  return (
+    <div className="sbx-bar">
+      <span className="sbx-bar-label">target</span>
+      {chip(null, 'host', 'ports listening on the host itself', true)}
+      {sandboxes.map((sb) =>
+        chip(
+          sb.name,
+          sb.name,
+          `Docker sandbox · ${sb.agent || 'agent'} · ${sb.status}` +
+            (sb.workspaces.length ? `\n${sb.workspaces.join('\n')}` : ''),
+          sb.status === 'running',
+        ),
+      )}
+    </div>
+  );
+}
+
 /** Every port appears exactly once, in one of three states. */
 type RowState = 'open' | 'forwarded' | 'waiting';
 
@@ -175,11 +240,24 @@ const STATE_LABEL: Record<RowState, string> = {
   waiting: 'waiting for process',
 };
 
+const NO_PORTS: RemotePort[] = [];
+const NO_FORWARDS: ForwardInfo[] = [];
+const NO_SANDBOXES: SandboxInfo[] = [];
+
 export function PortsView() {
   const hostId = useStore((s) => s.focusedHostId);
-  const ports = useStore((s) => (hostId ? (s.sessions[hostId]?.ports ?? []) : []));
-  const forwards = useStore((s) => (hostId ? (s.sessions[hostId]?.forwards ?? []) : []));
-  const unsupported = useStore((s) => (hostId ? (s.sessions[hostId]?.portsUnsupported ?? false) : false));
+  const hostPorts = useStore((s) => (hostId ? (s.sessions[hostId]?.ports ?? NO_PORTS) : NO_PORTS));
+  const allForwards = useStore((s) =>
+    hostId ? (s.sessions[hostId]?.forwards ?? NO_FORWARDS) : NO_FORWARDS,
+  );
+  const sandboxes = useStore((s) =>
+    hostId ? (s.sessions[hostId]?.sandboxes ?? NO_SANDBOXES) : NO_SANDBOXES,
+  );
+  const sbxError = useStore((s) => (hostId ? (s.sessions[hostId]?.sbxError ?? null) : null));
+  const target = useStore((s) => (hostId ? (s.sessions[hostId]?.portsTarget ?? null) : null));
+  const hostUnsupported = useStore((s) =>
+    hostId ? (s.sessions[hostId]?.portsUnsupported ?? false) : false,
+  );
   const connState = useStore((s) => (hostId ? s.sessions[hostId]?.conn.state : undefined));
   const portError = useStore((s) => (hostId ? (s.sessions[hostId]?.portError ?? null) : null));
   const setForward = useStore((s) => s.setForward);
@@ -190,6 +268,19 @@ export function PortsView() {
   // Ports can only be scanned over a live connection. Without one, the scanner
   // never runs — so distinguish "not connected" from "connected, scanning".
   const connected = connState === 'connected';
+
+  // The ports tab shows one target at a time: the host, or one sandbox.
+  const sandbox = target != null ? (sandboxes.find((sb) => sb.name === target) ?? null) : null;
+  const sandboxStopped = sandbox != null && sandbox.status !== 'running';
+  const ports = sandbox ? sandbox.ports : hostPorts;
+  const unsupported = sandbox ? false : hostUnsupported;
+  const forwards = allForwards.filter((f) => f.sandbox === target);
+  // Local ports already tunnelling to *another* target of this host — a
+  // forward on one of them switches it over instead of binding a new one.
+  const localElsewhere = new Map<number, ForwardInfo>(
+    allForwards.filter((f) => f.sandbox !== target).map((f) => [f.localPort, f]),
+  );
+  const describe = (f: ForwardInfo) => (f.sandbox ? `sandbox ${f.sandbox}` : 'the host');
 
   const fwdByPort = new Map<number, ForwardInfo>(forwards.map((f) => [f.port, f]));
   const scannedPorts = new Set(ports.map((p) => p.port));
@@ -219,16 +310,38 @@ export function PortsView() {
     <div className="view">
       <div className="ports-head">
         <div className="flex-1">
-          <div className="ports-title">Port forwarding</div>
+          <div className="ports-title">
+            {target ? `Port forwarding · ${target}` : 'Port forwarding'}
+          </div>
           <div className="ports-desc">
-            Ports listening on the remote appear here live. Toggle to tunnel to{' '}
-            <b>localhost</b> — click the local target to bind a different port, or pin one to
-            keep the tunnel and reclaim it automatically when the dev server restarts.
+            {target ? (
+              <>
+                Ports listening inside this Docker sandbox, its docker containers included —
+                nothing needs to be published with <code>sbx ports</code>. Forwarding a port
+                whose local port another sandbox holds <b>switches</b> it here, so{' '}
+                <b>localhost</b> (and the OAuth redirect on it) stays the same.
+              </>
+            ) : (
+              <>
+                Ports listening on the remote appear here live. Toggle to tunnel to{' '}
+                <b>localhost</b> — click the local target to bind a different port, or pin one
+                to keep the tunnel and reclaim it automatically when the dev server restarts.
+              </>
+            )}
           </div>
         </div>
-        <div className="scan-chip">auto-scan · 3s ↻</div>
+        <div className="scan-chip">auto-scan · {target ? '5s' : '3s'} ↻</div>
       </div>
+      {sandboxes.length > 0 && (
+        <SandboxBar
+          hostId={hostId}
+          target={target}
+          sandboxes={sandboxes}
+          forwards={allForwards}
+        />
+      )}
       <div className="ports-body">
+        {sbxError && sandboxes.length > 0 && <div className="pane-msg error">{sbxError}</div>}
         {portError && (
           <div className="port-err-banner">
             <span className="port-err-msg">{portError.message}</span>
@@ -236,7 +349,14 @@ export function PortsView() {
               <button
                 className="port-err-action"
                 onClick={() =>
-                  setForward(hostId, portError.port, true, portError.pinned, portError.hint!)
+                  setForward(
+                    hostId,
+                    portError.port,
+                    true,
+                    portError.pinned,
+                    portError.hint!,
+                    portError.sandbox,
+                  )
                 }
               >
                 bind to localhost:{portError.hint} instead
@@ -262,7 +382,11 @@ export function PortsView() {
         </div>
         {rows.length === 0 && !unsupported && (
           <div className="pane-msg">
-            {connected
+            {sandboxStopped
+              ? `${target} is ${sandbox?.status} — nettle doesn't start sandboxes. Run it (sbx run / sbx-forge) and its ports show up here; pinned tunnels resume on their own.`
+              : sandbox && connected
+                ? 'Nothing is listening in this sandbox yet. Services bound to 127.0.0.1 inside it work too.'
+                : connected
               ? 'Scanning remote ports…'
               : connState === 'reconnecting'
                 ? 'Reconnecting — ports will refresh once the link is back.'
@@ -274,6 +398,7 @@ export function PortsView() {
         {rows.map(({ port, info, fwd, state }) => {
           const listening = info != null;
           const dir = shortDir(info?.cwd);
+          const holder = fwd ? null : (localElsewhere.get(port) ?? null);
           return (
             <div key={port} className={`prow${fwd ? ' fwd' : ''}`}>
               <div className="pcol-port" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -302,18 +427,33 @@ export function PortsView() {
                 <span className={`state-chip ${state}`}>{STATE_LABEL[state]}</span>
               </span>
               <div className="pcol-local">
-                <LocalTunnel hostId={hostId} port={port} fwd={fwd} />
+                {holder ? (
+                  <span className="plocal off" title={`localhost:${port} tunnels to ${describe(holder)}`}>
+                    :{port} → {holder.sandbox ?? 'host'}
+                  </span>
+                ) : (
+                  <LocalTunnel hostId={hostId} port={port} fwd={fwd} sandbox={target} />
+                )}
               </div>
               <div
                 className="pcol-act"
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}
               >
-                {listening && <KillButton hostId={hostId} port={port} pid={info?.pid ?? null} />}
+                {listening && (
+                  <KillButton hostId={hostId} port={port} pid={info?.pid ?? null} sandbox={target} />
+                )}
                 {(listening || fwd) && (
                   <button
                     className="open-btn"
                     title="open in browser (forwards if needed)"
-                    onClick={() => openPortInBrowser(hostId, port, fwd?.localPort ?? null)}
+                    onClick={() =>
+                      openPortInBrowser(
+                        hostId,
+                        port,
+                        fwd?.localPort ?? (holder ? port : null),
+                        target,
+                      )
+                    }
                   >
                     ↗ open
                   </button>
@@ -326,26 +466,31 @@ export function PortsView() {
                       : 'pin — forward now and keep the tunnel across restarts and reconnects'
                   }
                   onClick={() =>
-                    setForward(hostId, port, true, !(fwd?.pinned ?? false), fwd?.localPort)
+                    setForward(hostId, port, true, !(fwd?.pinned ?? false), fwd?.localPort, target)
                   }
                 >
                   <span className="pin-glyph">⚲</span> {fwd?.pinned ? 'pinned' : 'pin'}
                 </button>
                 <button
-                  className={`tgl-btn${fwd ? ' on' : ''}`}
+                  className={`tgl-btn${fwd ? ' on' : ''}${holder ? ' switch' : ''}`}
+                  title={
+                    holder
+                      ? `localhost:${port} tunnels to ${describe(holder)} — move it here`
+                      : undefined
+                  }
                   onClick={() =>
                     fwd
-                      ? setForward(hostId, port, false, false)
-                      : setForward(hostId, port, true, false)
+                      ? setForward(hostId, port, false, false, undefined, target)
+                      : setForward(hostId, port, true, false, undefined, target)
                   }
                 >
-                  {fwd ? 'forwarded' : 'forward'}
+                  {fwd ? 'forwarded' : holder ? '⇄ switch here' : 'forward'}
                 </button>
               </div>
             </div>
           );
         })}
-        <AddForward hostId={hostId} />
+        <AddForward hostId={hostId} sandbox={target} />
       </div>
     </div>
   );

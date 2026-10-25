@@ -8,6 +8,8 @@ interface Row {
   hostName: string;
   connected: boolean;
   port: number;
+  /** Docker sandbox the port lives in; null = the host */
+  sandbox: string | null;
   localPort: number;
   pinned: boolean;
   live: boolean;
@@ -34,13 +36,17 @@ export function DashboardView() {
       const host = hosts.find((h) => h.id === sess.hostId);
       const connected = sess.conn.state === 'connected';
       const portInfo = new Map(sess.ports.map((p) => [p.port, p]));
+      const sandboxPorts = new Map(
+        sess.sandboxes.map((sb) => [sb.name, new Map(sb.ports.map((p) => [p.port, p]))]),
+      );
       const rows: Row[] = sess.forwards.map((f) => {
-        const info = portInfo.get(f.port);
+        const info = f.sandbox ? sandboxPorts.get(f.sandbox)?.get(f.port) : portInfo.get(f.port);
         return {
           hostId: sess.hostId,
           hostName: host?.name ?? sess.hostId,
           connected,
           port: f.port,
+          sandbox: f.sandbox,
           localPort: f.localPort,
           pinned: f.pinned,
           live: f.live,
@@ -60,7 +66,7 @@ export function DashboardView() {
   // Pinned forwards whose remote process is gone — candidates for bulk cleanup.
   const stalePins = groups.flatMap((g) => g.rows.filter((r) => r.pinned && !r.live));
   const unpinStale = () => {
-    for (const r of stalePins) setForward(r.hostId, r.port, false, false);
+    for (const r of stalePins) setForward(r.hostId, r.port, false, false, undefined, r.sandbox);
   };
 
   return (
@@ -128,14 +134,19 @@ export function DashboardView() {
               </div>
             )}
             {g.rows
-              .sort((a, b) => a.port - b.port)
+              .sort((a, b) => a.localPort - b.localPort)
               .map((r) => (
-                <div key={r.port} className="dash-row">
+                <div key={r.localPort} className="dash-row">
                   <span className="dcol-port dash-port-cell">
                     <span className={`pdot${r.live ? ' live' : ' waiting'}`} />
                     <span className="dash-port">{r.port}</span>
                   </span>
                   <span className="dcol-proc dash-proc">
+                    {r.sandbox && (
+                      <span className="psandbox" title={`Docker sandbox: ${r.sandbox}`}>
+                        ▣ {r.sandbox}
+                      </span>
+                    )}
                     {r.process ?? (r.live ? '—' : 'no process')}
                     {r.container && (
                       <span className="pcontainer" title={`docker container: ${r.container}`}>
@@ -160,13 +171,15 @@ export function DashboardView() {
                     <button
                       className="open-btn"
                       title="open localhost tunnel in browser"
-                      onClick={() => openPortInBrowser(r.hostId, r.port, r.localPort)}
+                      onClick={() => openPortInBrowser(r.hostId, r.port, r.localPort, r.sandbox)}
                     >
                       ↗ open
                     </button>
                     <button
                       className="unpin-btn"
-                      onClick={() => setForward(r.hostId, r.port, false, false)}
+                      onClick={() =>
+                        setForward(r.hostId, r.port, false, false, undefined, r.sandbox)
+                      }
                     >
                       stop
                     </button>

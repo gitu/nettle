@@ -3,11 +3,19 @@ import {
   applyConnState,
   applyForwards,
   applyPorts,
+  applySandboxes,
   applyTransfer,
   emptySession,
   type SessionSlice,
 } from './sessionReducer';
-import type { ConnState, PortsChanged, RemotePort, TransferMeta } from './ipc';
+import type {
+  ConnState,
+  PortsChanged,
+  RemotePort,
+  SandboxesChanged,
+  SandboxInfo,
+  TransferMeta,
+} from './ipc';
 
 const A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -163,7 +171,7 @@ describe('applyForwards', () => {
     const s = withSession(A, { state: 'connected', hostId: A, ip: '1.1.1.1', sinceMs: 1, epoch: 1 });
     const next = applyForwards(s, {
       hostId: A,
-      forwards: [{ port: 8080, localPort: 9090, pinned: true, live: true }],
+      forwards: [{ port: 8080, localPort: 9090, pinned: true, live: true, sandbox: null }],
     });
     expect(next.sessions[A].forwards).toHaveLength(1);
     expect(next.sessions[A].forwards[0].pinned).toBe(true);
@@ -200,5 +208,43 @@ describe('applyTransfer', () => {
   it('ignores transfers for an unknown host', () => {
     const s = empty();
     expect(applyTransfer(s, meta({}))).toBe(s);
+  });
+});
+
+describe('applySandboxes', () => {
+  const connected = { state: 'connected', hostId: A, ip: 'x', sinceMs: 0, epoch: 1 } as ConnState;
+  const sb = (name: string, status = 'running'): SandboxInfo => ({
+    name,
+    agent: 'claude',
+    status,
+    workspaces: [],
+    ports: [],
+  });
+  const event = (sandboxes: SandboxInfo[]): SandboxesChanged => ({
+    hostId: A,
+    available: true,
+    error: null,
+    sandboxes,
+  });
+
+  it('stores the sandboxes and keeps a still-present ports target', () => {
+    let s = withSession(A, connected);
+    s = { ...s, sessions: { [A]: { ...s.sessions[A], portsTarget: 'claude-a' } } };
+    const next = applySandboxes(s, event([sb('claude-a'), sb('claude-b', 'stopped')]));
+    expect(next.sessions[A].sandboxes.map((x) => x.name)).toEqual(['claude-a', 'claude-b']);
+    expect(next.sessions[A].sbxAvailable).toBe(true);
+    expect(next.sessions[A].portsTarget).toBe('claude-a');
+  });
+
+  it('falls back to the host when the shown sandbox disappears', () => {
+    let s = withSession(A, connected);
+    s = { ...s, sessions: { [A]: { ...s.sessions[A], portsTarget: 'claude-a' } } };
+    const next = applySandboxes(s, event([sb('claude-b')]));
+    expect(next.sessions[A].portsTarget).toBeNull();
+  });
+
+  it('ignores events for hosts without a session', () => {
+    const s = empty();
+    expect(applySandboxes(s, event([sb('claude-a')]))).toBe(s);
   });
 });

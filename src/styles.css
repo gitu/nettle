@@ -2141,3 +2141,58 @@ body {
   display: inline;
   flex: none;
 }
+
+/* Docker sandbox (sbx) target switcher on the ports tab */
+.sbx-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px 4px;
+}
+.sbx-bar-label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-right: 4px;
+}
+.sbx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 4px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sbx-chip:hover {
+  border-color: var(--border-strong);
+}
+.sbx-chip.active {
+  color: var(--acc);
+  border-color: color-mix(in srgb, var(--acc) 45%, transparent);
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+}
+.sbx-tunnels {
+  font-size: var(--text-xs);
+  color: var(--green);
+}
+.tgl-btn.switch {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+}
+.psandbox {
+  margin-right: 7px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  white-space: nowrap;
+}

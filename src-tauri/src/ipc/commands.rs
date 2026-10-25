@@ -13,8 +13,8 @@ use crate::ipc::types::{
     SessionInfo, TransferDirection, TransferMeta, TransferProgress,
 };
 use crate::local_fs;
-use crate::ports::forwards::ForwardManager;
-use crate::ports::scanner;
+use crate::ports::forwards::{ForwardManager, Target};
+use crate::ports::{sandbox, scanner};
 use crate::sftp::browse::SftpBrowser;
 use crate::sftp::transfers::TransferManager;
 use crate::ssh::session::{SessionActor, SessionCmd};
@@ -110,11 +110,17 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
     teardown(state, host_id).await;
 
     let persisted = state.store.load_state().await;
-    let pins: Vec<(u16, u16)> = persisted
+    let pins: Vec<(Target, u16)> = persisted
         .pinned_forwards
         .iter()
         .filter(|p| p.host_id == host_id)
-        .map(|p| (p.port, p.local_port()))
+        .map(|p| {
+            let target = Target {
+                sandbox: p.sandbox.clone(),
+                port: p.port,
+            };
+            (target, p.local_port())
+        })
         .collect();
     let ignored: HashSet<u16> = persisted
         .ignored_ports
@@ -132,12 +138,14 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
     );
 
     let (ports_live_tx, ports_live_rx) = watch::channel(HashSet::new());
+    let (sandbox_live_tx, sandbox_live_rx) = watch::channel(sandbox::SandboxPorts::new());
     let forwards = ForwardManager::new(
         ui.clone(),
         host_id,
         state.store.clone(),
         epoch_rx.clone(),
         ports_live_rx.clone(),
+        sandbox_live_rx,
     );
     let ignored_shared = Arc::new(StdMutex::new(ignored));
     let scanner_task = scanner::spawn(
@@ -149,9 +157,16 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         ignored_shared,
         cmd_tx.clone(),
     );
+    let sandbox_task = sandbox::spawn(
+        ui.clone(),
+        host_id,
+        epoch_rx.clone(),
+        forwards.clone(),
+        sandbox_live_tx,
+    );
 
-    for (port, local_port) in pins {
-        let _ = forwards.set_with_local(port, local_port, true, true).await;
+    for (target, local_port) in pins {
+        let _ = forwards.set_target(target, local_port, true, true).await;
     }
 
     // Stats change on hot paths (tunnel bytes); push them to the UI at a
@@ -178,6 +193,7 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         forwards,
         actor_task: StdMutex::new(Some(actor_task)),
         scanner_task: StdMutex::new(Some(scanner_task)),
+        sandbox_task: StdMutex::new(Some(sandbox_task)),
         stats_task: StdMutex::new(Some(stats_task)),
     });
     state.sessions.lock().await.insert(host_id, session);
@@ -199,6 +215,10 @@ pub(crate) async fn teardown(state: &AppState, host_id: Uuid) {
         let scanner = old.scanner_task.lock().unwrap().take();
         if let Some(scanner) = scanner {
             scanner.abort();
+        }
+        let sandboxes = old.sandbox_task.lock().unwrap().take();
+        if let Some(sandboxes) = sandboxes {
+            sandboxes.abort();
         }
         let ticker = old.stats_task.lock().unwrap().take();
         if let Some(ticker) = ticker {
@@ -506,12 +526,34 @@ pub async fn forward_set(
     enabled: bool,
     pinned: bool,
     local_port: Option<u16>,
+    sandbox: Option<String>,
 ) -> Result<()> {
     let session = with_session(&state, host_id).await?;
+    let target = sandbox_target(sandbox, port)?;
     session
         .forwards
-        .set_with_local(port, local_port.unwrap_or(0), enabled, pinned)
+        .set_target(target, local_port.unwrap_or(0), enabled, pinned)
         .await
+}
+
+/// A forward target, refusing sandbox names that aren't safe on a command line.
+pub(crate) fn sandbox_target(sandbox: Option<String>, port: u16) -> Result<Target> {
+    if let Some(name) = &sandbox {
+        if !sandbox::valid_name(name) {
+            return Err(NettleError::Msg(format!("invalid sandbox name {name:?}")));
+        }
+    }
+    Ok(Target { sandbox, port })
+}
+
+/// Latest Docker sandbox snapshot for a host (hydration counterpart of the
+/// `sandboxes-changed` event); `None` until the first scan finished.
+#[tauri::command]
+pub fn list_sandboxes(
+    state: State<'_, AppState>,
+    host_id: Uuid,
+) -> Option<crate::ipc::types::SandboxesChanged> {
+    state.ui.sandboxes.lock().unwrap().get(&host_id).cloned()
 }
 
 /// Best-effort probe over the SSH connection: is the remote loopback port
@@ -522,10 +564,28 @@ pub async fn probe_port_scheme(
     state: State<'_, AppState>,
     host_id: Uuid,
     port: u16,
+    sandbox: Option<String>,
 ) -> Result<String> {
     let session = with_session(&state, host_id).await?;
     let epoch = crate::ssh::current_epoch(&session.epoch_rx).ok_or(NettleError::NotConnected)?;
-    let scheme = crate::ssh::probe_http_scheme(&epoch.handle, port).await?;
+    let target = sandbox_target(sandbox, port)?;
+    let channel = match &target.sandbox {
+        None => crate::ssh::channel_open_loopback(&epoch.handle, port, "127.0.0.1", 0).await?,
+        Some(name) => {
+            let bind = state
+                .ui
+                .sandboxes
+                .lock()
+                .unwrap()
+                .get(&host_id)
+                .and_then(|s| s.sandboxes.iter().find(|s| &s.name == name).cloned())
+                .and_then(|s| s.ports.into_iter().find(|p| p.port == port))
+                .map(|p| p.bind);
+            crate::ports::forwards::open_sandbox_bridge(&epoch.handle, name, port, bind.as_deref())
+                .await?
+        }
+    };
+    let scheme = crate::ssh::probe_http_scheme(channel).await?;
     Ok(scheme.to_string())
 }
 
@@ -552,6 +612,7 @@ pub async fn all_forwards(state: State<'_, AppState>) -> Result<Vec<HostForward>
     out.sort_by(|a, b| {
         a.host_name
             .cmp(&b.host_name)
+            .then(a.forward.sandbox.cmp(&b.forward.sandbox))
             .then(a.forward.port.cmp(&b.forward.port))
     });
     Ok(out)
@@ -579,17 +640,23 @@ pub async fn port_kill_remote(
     port: u16,
     pid: Option<u32>,
     force: bool,
+    sandbox: Option<String>,
 ) -> Result<String> {
     let session = with_session(&state, host_id).await?;
     let epoch = crate::ssh::current_epoch(&session.epoch_rx).ok_or(NettleError::NotConnected)?;
+    let sandbox = sandbox_target(sandbox, port)?.sandbox;
 
-    let target = match pid {
+    let mut target = match pid {
         Some(pid) => format!("pid {pid} (port {port})"),
         None => format!("the process on port {port}"),
     };
     let sig = if force { "SIGKILL" } else { "SIGTERM" };
-    let (out, exit) =
-        crate::ssh::exec_capture(&epoch.handle, &kill_command(port, pid, force)).await?;
+    let mut cmd = kill_command(port, pid, force);
+    if let Some(name) = &sandbox {
+        cmd = sandbox::exec_in_command(name, &cmd);
+        target = format!("{target} in sandbox {name}");
+    }
+    let (out, exit) = crate::ssh::exec_capture(&epoch.handle, &cmd).await?;
 
     if exit == Some(0) {
         let msg = format!("sent {sig} to {target}");

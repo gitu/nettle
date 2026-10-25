@@ -124,7 +124,12 @@ fn rebuild_now<R: Runtime>(app: &AppHandle<R>) {
                 let fwd = forwards.get(&h.id);
                 let forward_count = fwd.map(|v| v.len()).unwrap_or(0);
                 let fwd_ports: std::collections::HashSet<u16> = fwd
-                    .map(|v| v.iter().map(|f| f.port).collect())
+                    .map(|v| {
+                        v.iter()
+                            .filter(|f| f.sandbox.is_none())
+                            .map(|f| f.port)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let prows = if connected {
                     ports
@@ -288,7 +293,11 @@ fn handle_host_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
             tauri::async_runtime::spawn(async move {
                 if let Ok(session) = commands::with_session(&state, uuid).await {
                     // Toggle: forward if not already, otherwise remove it.
-                    let on = session.forwards.list().iter().any(|f| f.port == port);
+                    let on = session
+                        .forwards
+                        .list()
+                        .iter()
+                        .any(|f| f.port == port && f.sandbox.is_none());
                     let _ = session.forwards.set_with_local(port, 0, !on, false).await;
                 }
             });

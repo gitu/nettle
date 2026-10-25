@@ -5,6 +5,8 @@ import type {
   ForwardsChanged,
   PortsChanged,
   RemotePort,
+  SandboxesChanged,
+  SandboxInfo,
   TransferMeta,
 } from './ipc';
 
@@ -20,6 +22,12 @@ export interface SessionState {
   ports: RemotePort[];
   portsUnsupported: boolean;
   forwards: ForwardInfo[];
+  /** Docker sandboxes on the host (`sbx`), empty when it has none */
+  sandboxes: SandboxInfo[];
+  sbxAvailable: boolean;
+  sbxError: string | null;
+  /** what the ports tab shows: null = the host, else a sandbox name */
+  portsTarget: string | null;
   transfers: Record<string, TransferRow>;
   remote: DirListing | null;
   remoteSel: string | null;
@@ -33,6 +41,8 @@ export interface SessionState {
 export interface PortError {
   /** remote port the action was about */
   port: number;
+  /** sandbox the port lives in (null = the host) */
+  sandbox: string | null;
   message: string;
   /** for local bind conflicts: a known-free local port to offer instead */
   hint: number | null;
@@ -54,6 +64,10 @@ export function emptySession(hostId: string): SessionState {
     ports: [],
     portsUnsupported: false,
     forwards: [],
+    sandboxes: [],
+    sbxAvailable: false,
+    sbxError: null,
+    portsTarget: null,
     transfers: {},
     remote: null,
     remoteSel: null,
@@ -119,6 +133,30 @@ export function applyForwards(slice: SessionSlice, f: ForwardsChanged): SessionS
   return {
     ...slice,
     sessions: { ...slice.sessions, [f.hostId]: { ...sess, forwards: f.forwards } },
+  };
+}
+
+/** Fold a sandboxes-changed event. A ports tab showing a sandbox that is
+ *  gone falls back to the host. */
+export function applySandboxes(slice: SessionSlice, p: SandboxesChanged): SessionSlice {
+  const sess = slice.sessions[p.hostId];
+  if (!sess) return slice;
+  const portsTarget =
+    sess.portsTarget != null && p.sandboxes.some((s) => s.name === sess.portsTarget)
+      ? sess.portsTarget
+      : null;
+  return {
+    ...slice,
+    sessions: {
+      ...slice.sessions,
+      [p.hostId]: {
+        ...sess,
+        sandboxes: p.sandboxes,
+        sbxAvailable: p.available,
+        sbxError: p.error,
+        portsTarget,
+      },
+    },
   };
 }
 

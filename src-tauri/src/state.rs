@@ -64,6 +64,9 @@ pub struct UiBridge {
     /// Latest forward set per host (same rationale as `ports`).
     pub forwards:
         StdMutex<std::collections::HashMap<uuid::Uuid, Vec<crate::ipc::types::ForwardInfo>>>,
+    /// Latest Docker sandbox snapshot per host, for frontend hydration.
+    pub sandboxes:
+        StdMutex<std::collections::HashMap<uuid::Uuid, crate::ipc::types::SandboxesChanged>>,
     activity: StdMutex<ActivityBuf>,
     /// Per-host runtime connection statistics (outlive individual sessions).
     pub stats: crate::stats::StatsHub,
@@ -87,6 +90,7 @@ impl UiBridge {
             conn_states: StdMutex::new(std::collections::HashMap::new()),
             ports: StdMutex::new(std::collections::HashMap::new()),
             forwards: StdMutex::new(std::collections::HashMap::new()),
+            sandboxes: StdMutex::new(std::collections::HashMap::new()),
             activity: StdMutex::new(ActivityBuf::default()),
             stats: crate::stats::StatsHub::default(),
         })
@@ -184,6 +188,7 @@ impl UiBridge {
             // A gone session has no ports or forwards to show.
             self.ports.lock().unwrap().remove(&host_id);
             self.forwards.lock().unwrap().remove(&host_id);
+            self.sandboxes.lock().unwrap().remove(&host_id);
         } else {
             map.insert(host_id, state.clone());
         }
@@ -201,6 +206,7 @@ impl UiBridge {
         self.conn_states.lock().unwrap().remove(&host_id);
         self.ports.lock().unwrap().remove(&host_id);
         self.forwards.lock().unwrap().remove(&host_id);
+        self.sandboxes.lock().unwrap().remove(&host_id);
     }
 
     pub fn emit_ports(&self, payload: &PortsChanged) {
@@ -217,6 +223,14 @@ impl UiBridge {
             .unwrap()
             .insert(payload.host_id, payload.forwards.clone());
         self.emit("forwards-changed", payload);
+    }
+
+    pub fn emit_sandboxes(&self, payload: &crate::ipc::types::SandboxesChanged) {
+        self.sandboxes
+            .lock()
+            .unwrap()
+            .insert(payload.host_id, payload.clone());
+        self.emit("sandboxes-changed", payload);
     }
 
     pub fn emit_transfer(&self, payload: &TransferMeta) {
@@ -301,6 +315,8 @@ pub struct ActiveSession {
     pub forwards: Arc<ForwardManager>,
     pub actor_task: StdMutex<Option<JoinHandle<()>>>,
     pub scanner_task: StdMutex<Option<JoinHandle<()>>>,
+    /// Docker sandbox (`sbx`) discovery + port scan.
+    pub sandbox_task: StdMutex<Option<JoinHandle<()>>>,
     /// Low-rate ticker that pushes changed connection stats to the UI.
     pub stats_task: StdMutex<Option<JoinHandle<()>>>,
 }

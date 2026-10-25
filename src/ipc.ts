@@ -92,6 +92,27 @@ export interface ForwardInfo {
   localPort: number;
   pinned: boolean;
   live: boolean;
+  /** Docker sandbox on the host the port lives in; null = the host itself */
+  sandbox: string | null;
+}
+
+/** One Docker sandbox (`sbx ls`) on a connected host. */
+export interface SandboxInfo {
+  name: string;
+  agent: string;
+  /** 'running' | 'stopped' | … */
+  status: string;
+  workspaces: string[];
+  /** listening ports inside the sandbox (only scanned while running) */
+  ports: RemotePort[];
+}
+
+export interface SandboxesChanged {
+  hostId: string;
+  /** `sbx` is installed on the host */
+  available: boolean;
+  error: string | null;
+  sandboxes: SandboxInfo[];
 }
 
 export type TransferDirection = 'down' | 'up';
@@ -234,14 +255,29 @@ export const api = {
     enabled: boolean,
     pinned: boolean,
     localPort?: number,
-  ) => invoke<void>('forward_set', { hostId, port, enabled, pinned, localPort: localPort ?? null }),
+    sandbox?: string | null,
+  ) =>
+    invoke<void>('forward_set', {
+      hostId,
+      port,
+      enabled,
+      pinned,
+      localPort: localPort ?? null,
+      sandbox: sandbox ?? null,
+    }),
   forwardList: (hostId: string) => invoke<ForwardInfo[]>('forward_list', { hostId }),
-  probePortScheme: (hostId: string, port: number) =>
-    invoke<'http' | 'https'>('probe_port_scheme', { hostId, port }),
+  listSandboxes: (hostId: string) => invoke<SandboxesChanged | null>('list_sandboxes', { hostId }),
+  probePortScheme: (hostId: string, port: number, sandbox?: string | null) =>
+    invoke<'http' | 'https'>('probe_port_scheme', { hostId, port, sandbox: sandbox ?? null }),
   allForwards: () => invoke<HostForward[]>('all_forwards'),
   portIgnore: (hostId: string, port: number) => invoke<void>('port_ignore', { hostId, port }),
-  portKillRemote: (hostId: string, port: number, pid: number | null, force: boolean) =>
-    invoke<string>('port_kill_remote', { hostId, port, pid, force }),
+  portKillRemote: (
+    hostId: string,
+    port: number,
+    pid: number | null,
+    force: boolean,
+    sandbox?: string | null,
+  ) => invoke<string>('port_kill_remote', { hostId, port, pid, force, sandbox: sandbox ?? null }),
 
   listActivity: () => invoke<ActivityEntry[]>('list_activity'),
   clearActivity: () => invoke<void>('clear_activity'),
