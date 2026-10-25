@@ -108,6 +108,32 @@ pub struct ForwardInfo {
     pub pinned: bool,
     /// remote process is currently listening
     pub live: bool,
+    /// Docker sandbox (`sbx`) on the host the port lives in; `None` = the host itself.
+    pub sandbox: Option<String>,
+}
+
+/// One Docker sandbox (`sbx ls`) on a connected host, with the TCP ports
+/// listening inside it (only scanned while it is running).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxInfo {
+    pub name: String,
+    pub agent: String,
+    /// "running" | "stopped" | … as reported by `sbx ls`
+    pub status: String,
+    pub workspaces: Vec<String>,
+    pub ports: Vec<RemotePort>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxesChanged {
+    pub host_id: Uuid,
+    /// `sbx` is installed on the host.
+    pub available: bool,
+    /// Last `sbx` failure (daemon down, not signed in, …), if any.
+    pub error: Option<String>,
+    pub sandboxes: Vec<SandboxInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

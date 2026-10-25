@@ -14,6 +14,7 @@ import {
   type HostKeyPrompt,
   type IpcError,
   type PortsChanged,
+  type SandboxesChanged,
   type Settings,
   type TransferMeta,
   type TransferProgress,
@@ -22,6 +23,7 @@ import {
   applyConnState,
   applyForwards,
   applyPorts,
+  applySandboxes,
   applyTransfer,
   emptySession,
   type SessionState,
@@ -80,8 +82,17 @@ interface NettleState {
     enabled: boolean,
     pinned: boolean,
     localPort?: number,
+    sandbox?: string | null,
   ) => Promise<void>;
-  killRemote: (hostId: string, port: number, pid: number | null, force: boolean) => Promise<void>;
+  killRemote: (
+    hostId: string,
+    port: number,
+    pid: number | null,
+    force: boolean,
+    sandbox?: string | null,
+  ) => Promise<void>;
+  /** pick what the ports tab shows: the host (null) or one of its sandboxes */
+  setPortsTarget: (hostId: string, sandbox: string | null) => void;
   dismissPortError: (hostId: string) => void;
   clearActivity: () => Promise<void>;
 }
@@ -191,11 +202,13 @@ export const useStore = create<NettleState>((set, get) => ({
 
   dismissToast: (hostId) => patchSession(set, hostId, (s) => ({ ...s, toast: null })),
 
-  setForward: async (hostId, port, enabled, pinned, localPort) => {
+  setForward: async (hostId, port, enabled, pinned, localPort, sandbox = null) => {
     try {
-      await api.forwardSet(hostId, port, enabled, pinned, localPort);
+      await api.forwardSet(hostId, port, enabled, pinned, localPort, sandbox);
       patchSession(set, hostId, (s) =>
-        s.portError?.port === port ? { ...s, portError: null } : s,
+        s.portError?.port === port && s.portError.sandbox === sandbox
+          ? { ...s, portError: null }
+          : s,
       );
     } catch (e: unknown) {
       const err = e as IpcError;
@@ -203,6 +216,7 @@ export const useStore = create<NettleState>((set, get) => ({
         ...s,
         portError: {
           port,
+          sandbox,
           message: err?.message ?? String(e),
           hint: err?.code === 'port_in_use' ? (err.hint ?? null) : null,
           pinned,
@@ -211,20 +225,31 @@ export const useStore = create<NettleState>((set, get) => ({
     }
   },
 
-  killRemote: async (hostId, port, pid, force) => {
+  killRemote: async (hostId, port, pid, force, sandbox = null) => {
     try {
-      await api.portKillRemote(hostId, port, pid, force);
+      await api.portKillRemote(hostId, port, pid, force, sandbox);
       patchSession(set, hostId, (s) =>
-        s.portError?.port === port ? { ...s, portError: null } : s,
+        s.portError?.port === port && s.portError.sandbox === sandbox
+          ? { ...s, portError: null }
+          : s,
       );
     } catch (e: unknown) {
       const err = e as IpcError;
       patchSession(set, hostId, (s) => ({
         ...s,
-        portError: { port, message: err?.message ?? String(e), hint: null, pinned: false },
+        portError: {
+          port,
+          sandbox,
+          message: err?.message ?? String(e),
+          hint: null,
+          pinned: false,
+        },
       }));
     }
   },
+
+  setPortsTarget: (hostId, sandbox) =>
+    patchSession(set, hostId, (s) => ({ ...s, portsTarget: sandbox })),
 
   dismissPortError: (hostId) => patchSession(set, hostId, (s) => ({ ...s, portError: null })),
 
@@ -287,6 +312,10 @@ export async function initStore() {
 
     listen<ForwardsChanged>('forwards-changed', (e) => set((s) => applyForwards(s, e.payload))),
 
+    listen<SandboxesChanged>('sandboxes-changed', (e) =>
+      set((s) => applySandboxes(s, e.payload)),
+    ),
+
     listen<TransferMeta>('transfer-updated', (e) => set((s) => applyTransfer(s, e.payload))),
 
     listen<ActivityEntry>('activity', (e) =>
@@ -347,6 +376,10 @@ export async function initStore() {
   });
   for (const hostId of Object.keys(sessionMap)) {
     get().navigateRemote(hostId, '~').catch(() => {});
+    api
+      .listSandboxes(hostId)
+      .then((snap) => snap && set((s) => applySandboxes(s, snap)))
+      .catch(() => {});
   }
   try {
     set({ local: await api.localList(await api.localHomeDir()) });

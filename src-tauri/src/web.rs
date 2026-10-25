@@ -237,6 +237,8 @@ struct ForwardBody {
     pinned: bool,
     #[serde(default)]
     local_port: Option<u16>,
+    #[serde(default)]
+    sandbox: Option<String>,
 }
 
 async fn api_state(State(ctx): State<Ctx>) -> Result<Json<Value>, ApiError> {
@@ -334,10 +336,11 @@ async fn api_forward(
     Json(body): Json<ForwardBody>,
 ) -> Result<StatusCode, ApiError> {
     let session = with_session(&ctx.app, body.host_id).await?;
+    let target = crate::ipc::commands::sandbox_target(body.sandbox, body.port)?;
     session
         .forwards
-        .set_with_local(
-            body.port,
+        .set_target(
+            target,
             body.local_port.unwrap_or(0),
             body.enabled,
             body.pinned,

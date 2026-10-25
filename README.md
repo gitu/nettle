@@ -34,6 +34,11 @@ day-to-day work against remote dev boxes:
 - **Activity log** — an in-app log of everything nettle does (connections,
   tunnels, port scans, kills), filterable by host and severity. Bind conflicts
   surface as actionable errors with a known-free port to use instead.
+- **Docker sandboxes** — on a host running Docker Sandboxes
+  (`sbx`), the ports tab lists every sandbox and the ports listening inside
+  it, its docker containers included. Forward one without `sbx ports`, then
+  move the same local port to another sandbox with one click (*⇄ switch here*),
+  so `localhost:4180` and the OAuth redirect on it stay the same.
 - **Connection sets** — name a group of hosts and bring them all up with one
   click (e.g. "production" = api + db + cache).
 - **Tray-first** — closing the window hides nettle to the menu bar / system
@@ -74,6 +79,24 @@ on Windows, allow the SmartScreen prompt.
   auto-reconnects, disconnect/reconnect cycles, and host switching don't
   re-prompt. Quitting the app forgets everything.
 - Host definitions (`hosts.json`) contain no secrets.
+
+## Docker sandboxes
+
+When a connected host has the `sbx` CLI, nettle runs `sbx ls --json` every 5 s
+and scans each **running** sandbox with `sbx exec` (`ss`, else `/proc/net/tcp`,
+plus `docker ps`). Stopped sandboxes are listed but never started. Pick a
+sandbox in the ports tab's *target* bar to see and forward its ports.
+
+A sandbox tunnel needs nothing published on the host: each connection is an SSH
+exec channel running `sbx exec -i <sandbox> socat - TCP:127.0.0.1:<port>` (`nc`
+when the image has no socat). That reaches services bound only to the
+sandbox's loopback, and costs ~0.25 s of `sbx exec` start-up per new TCP
+connection (keep-alive connections pay it once).
+
+Forwards are keyed by local port. Forwarding sandbox B's 4180 while
+`localhost:4180` tunnels to sandbox A **switches** the listener over in place:
+connections to A are closed, new ones go to B, and a pin moves with it, so after
+a reconnect the tunnel comes back pointing at B.
 
 ## Remote control (optional)
 
@@ -132,7 +155,7 @@ src-tauri/src/
 ├── ssh/        session actor (reconnect + fresh DNS), auth, host keys
 ├── terminal.rs PTY channel with output coalescing
 ├── sftp/       browse session + concurrent transfer queue
-├── ports/      scanner + parsers + forward manager
+├── ports/      scanner + parsers + forward manager + Docker sandboxes (sbx)
 ├── stats.rs    per-host runtime connection statistics
 ├── web.rs      optional token-authorized HTTP control server (axum)
 └── ipc/        Tauri commands & typed event payloads
