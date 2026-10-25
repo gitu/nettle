@@ -142,19 +142,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          mkdir assets && cd assets
+          # not "assets": that directory already exists in the repo (screenshots)
+          mkdir release-files
           gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
-            -p '*.dmg' -p '*.AppImage' -p '*.msi'
+            -D release-files -p '*.dmg' -p '*.AppImage' -p '*.msi'
           sum() { sha256sum "$1" | cut -d' ' -f1; }
-          cd ..
           mkdir -p tap/Casks tap/bucket
           render() {
             sed \
               -e "s/@VERSION@/$VERSION/g" \
-              -e "s/@SHA_MAC_ARM@/$(sum assets/nettle_${VERSION}_aarch64.dmg)/" \
-              -e "s/@SHA_MAC_INTEL@/$(sum assets/nettle_${VERSION}_x64.dmg)/" \
-              -e "s/@SHA_LINUX@/$(sum assets/nettle_${VERSION}_amd64.AppImage)/" \
-              -e "s/@SHA_WIN@/$(sum assets/nettle_${VERSION}_x64_en-US.msi)/" \
+              -e "s/@SHA_MAC_ARM@/$(sum release-files/nettle_${VERSION}_aarch64.dmg)/" \
+              -e "s/@SHA_MAC_INTEL@/$(sum release-files/nettle_${VERSION}_x64.dmg)/" \
+              -e "s/@SHA_LINUX@/$(sum release-files/nettle_${VERSION}_amd64.AppImage)/" \
+              -e "s/@SHA_WIN@/$(sum release-files/nettle_${VERSION}_x64_en-US.msi)/" \
               "$1"
           }
           render packaging/nettle.rb.tmpl > tap/Casks/nettle.rb
