@@ -53,10 +53,17 @@ day-to-day work against remote dev boxes:
 
 ## Install
 
-**macOS (Homebrew):**
+**macOS / Linux (Homebrew):**
 
 ```sh
 brew install --cask gitu/tap/nettle
+```
+
+**Windows (Scoop):**
+
+```powershell
+scoop bucket add gitu https://github.com/gitu/homebrew-tap
+scoop install nettle
 ```
 
 Or grab the latest build from [Releases](https://github.com/gitu/nettle/releases):
@@ -198,7 +205,8 @@ cd src-tauri && NETTLE_E2E=1 cargo test --test e2e
 
 CI runs the full suite (fmt, clippy `-D warnings`, unit, E2E against sshd, and
 the frontend build) on every push; tagging `v*` builds and publishes installers
-for all three platforms and bumps the Homebrew cask (needs the
+for all three platforms and updates the Homebrew cask (macOS + Linux) and Scoop manifest (Windows) from
+`packaging/*.tmpl` (needs the
 `HOMEBREW_TAP_TOKEN` secret — a PAT with write access to `gitu/homebrew-tap`).
 
 To release, push a `vX.Y.Z` tag on `main` — nothing else. The release workflow

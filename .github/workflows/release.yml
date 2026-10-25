@@ -115,7 +115,7 @@ jobs:
           args: ${{ matrix.args }}
 
   homebrew:
-    name: Update Homebrew cask
+    name: Update Homebrew cask and Scoop bucket
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -123,17 +123,8 @@ jobs:
         id: token
         run: echo "have=${{ secrets.HOMEBREW_TAP_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
 
-      - name: Compute DMG checksums
+      - uses: actions/checkout@v7
         if: steps.token.outputs.have == 'true'
-        id: sums
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p '*.dmg'
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "arm=$(sha256sum nettle_${VERSION}_aarch64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "intel=$(sha256sum nettle_${VERSION}_x64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tap
         if: steps.token.outputs.have == 'true'
@@ -143,17 +134,38 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
-      - name: Bump cask
+      # Renders packaging/*.tmpl into the tap: Casks/nettle.rb (macOS + Linux
+      # via Homebrew) and bucket/nettle.json (Windows via Scoop).
+      - name: Render cask and Scoop manifest
+        if: steps.token.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir assets && cd assets
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+            -p '*.dmg' -p '*.AppImage' -p '*.msi'
+          sum() { sha256sum "$1" | cut -d' ' -f1; }
+          cd ..
+          mkdir -p tap/Casks tap/bucket
+          render() {
+            sed \
+              -e "s/@VERSION@/$VERSION/g" \
+              -e "s/@SHA_MAC_ARM@/$(sum assets/nettle_${VERSION}_aarch64.dmg)/" \
+              -e "s/@SHA_MAC_INTEL@/$(sum assets/nettle_${VERSION}_x64.dmg)/" \
+              -e "s/@SHA_LINUX@/$(sum assets/nettle_${VERSION}_amd64.AppImage)/" \
+              -e "s/@SHA_WIN@/$(sum assets/nettle_${VERSION}_x64_en-US.msi)/" \
+              "$1"
+          }
+          render packaging/nettle.rb.tmpl > tap/Casks/nettle.rb
+          render packaging/nettle.json.tmpl > tap/bucket/nettle.json
+
+      - name: Commit tap
         if: steps.token.outputs.have == 'true'
         run: |
           cd tap
-          sed -i \
-            -e 's/^  version ".*"$/  version "${{ steps.sums.outputs.version }}"/' \
-            -e 's/^  sha256 arm:   ".*",$/  sha256 arm:   "${{ steps.sums.outputs.arm }}",/' \
-            -e 's/^         intel: ".*"$/         intel: "${{ steps.sums.outputs.intel }}"/' \
-            Casks/nettle.rb
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/nettle.rb
-          git diff --cached --quiet || git commit -m "nettle ${{ steps.sums.outputs.version }}"
+          git add Casks/nettle.rb bucket/nettle.json
+          git diff --cached --quiet || git commit -m "nettle ${GITHUB_REF_NAME#v}"
           git push
