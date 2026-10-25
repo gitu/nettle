@@ -4,6 +4,7 @@ use std::sync::Arc;
 use russh::client;
 use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
 use russh::keys::ssh_key;
+use russh::keys::PublicKeyOrCertificate;
 use tokio::sync::mpsc;
 
 use crate::ipc::types::HostKeyPrompt;
@@ -22,7 +23,17 @@ pub struct ClientHandler {
 impl client::Handler for ClientHandler {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, key: &ssh_key::PublicKey) -> Result<bool, Self::Error> {
+    async fn check_server_key(
+        &mut self,
+        key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        // known_hosts pins the underlying public key, also for certificate host keys.
+        let key = &match key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
+            PublicKeyOrCertificate::Certificate(cert) => {
+                ssh_key::PublicKey::from(cert.public_key().clone())
+            }
+        };
         match check_known_hosts_path(&self.hostname, self.port, key, &self.known_hosts_path) {
             Ok(true) => Ok(true),
             Ok(false) => self.prompt_unknown_key(key).await,
