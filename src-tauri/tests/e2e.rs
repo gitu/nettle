@@ -562,8 +562,10 @@ async fn local_port_switches_between_host_and_sandbox() {
     }
     let mut h = connect().await;
     let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
+    // Leftovers of an earlier, failed run would be auto-forwarded right away.
     let install = format!(
-        "mkdir -p ~/.local/bin && cat > ~/.local/bin/sbx <<'EOF'\n{FAKE_SBX}EOF\nchmod +x ~/.local/bin/sbx"
+        "rm -rf ~/.config/nettle; kill $(cat ~/adv-listener.pid 2>/dev/null) 2>/dev/null; \
+         mkdir -p ~/.local/bin && cat > ~/.local/bin/sbx <<'EOF'\n{FAKE_SBX}EOF\nchmod +x ~/.local/bin/sbx"
     );
     let (_, exit) = exec_capture(&epoch.handle, &install)
         .await
@@ -659,10 +661,16 @@ async fn local_port_switches_between_host_and_sandbox() {
     assert!(h.store.load_state().await.pinned_forwards.is_empty());
 
     // Advertised by the sandbox (`nettle-port`): forwarded to the same local
-    // port once it listens, through the sandbox bridge.
+    // port once it listens, through the sandbox bridge. Its own port, not
+    // sshd's: on CI, docker's -p already holds localhost:2222 on the runner.
+    let adv_port: u16 = 43250;
     let (_, exit) = exec_capture(
         &epoch.handle,
-        &format!("mkdir -p ~/.config/nettle && echo '{remote_port} sshd' > ~/.config/nettle/ports"),
+        &format!(
+            "nohup sh -c 'while true; do echo via-svc | nc -l -p {adv_port} 2>/dev/null \
+             || echo via-svc | nc -l {adv_port}; done' >/dev/null 2>&1 & echo $! > ~/adv-listener.pid; \
+             mkdir -p ~/.config/nettle && echo '{adv_port} test' > ~/.config/nettle/ports"
+        ),
     )
     .await
     .unwrap();
@@ -678,22 +686,29 @@ async fn local_port_switches_between_host_and_sandbox() {
     .await
     .expect("advertised port auto-forwarded");
     assert_eq!(auto.sandbox.as_deref(), Some("sb-a"));
-    assert_eq!(auto.local_port, remote_port);
+    assert_eq!(auto.port, adv_port);
+    assert_eq!(auto.local_port, adv_port);
     assert!(!auto.pinned);
-    assert!(banner_through(remote_port).await.starts_with("via-sbx"));
+    assert!(banner_through(adv_port).await.starts_with("via-sbx"));
 
     // Stopped by the user: stays stopped across the next scans.
-    forwards
-        .set_target(sb.clone(), 0, false, false)
-        .await
-        .unwrap();
+    let adv = Target {
+        sandbox: Some("sb-a".into()),
+        port: adv_port,
+    };
+    forwards.set_target(adv, 0, false, false).await.unwrap();
     tokio::time::sleep(Duration::from_secs(12)).await;
     assert!(
         forwards.list().is_empty(),
         "a stopped auto-forward is not redone"
     );
 
-    let _ = exec_capture(&epoch.handle, "rm -rf ~/.config/nettle").await;
+    let _ = exec_capture(
+        &epoch.handle,
+        "kill $(cat ~/adv-listener.pid) 2>/dev/null; pkill -f 'nc -l' 2>/dev/null; \
+         rm -rf ~/.config/nettle ~/adv-listener.pid",
+    )
+    .await;
     let _ = exec_capture(&epoch.handle, "rm -f ~/.local/bin/sbx").await;
     scanner.abort();
     drop(live_tx);
