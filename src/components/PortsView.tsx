@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import type { AdvertisedPort, ForwardInfo, RemotePort, SandboxInfo } from '../ipc';
 import { shortDir } from '../util';
 import { openPortInBrowser } from '../openPort';
+import { ServicesPanel } from './ServicesPanel';
 
 /** Two-step kill control for the process behind a remote port: first click asks
  *  for confirmation, then offers a graceful SIGTERM or a hard SIGKILL. */
@@ -356,6 +357,9 @@ export function PortsView() {
       )}
       <div className="ports-body">
         {sbxError && sandboxes.length > 0 && <div className="pane-msg error">{sbxError}</div>}
+        {sandbox && !sandboxStopped && (
+          <ServicesPanel hostId={hostId} sandbox={sandbox.name} services={sandbox.services} />
+        )}
         {portError && (
           <div className="port-err-banner">
             <span className="port-err-msg">{portError.message}</span>

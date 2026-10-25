@@ -123,9 +123,23 @@ pub struct SandboxInfo {
     pub status: String,
     pub workspaces: Vec<String>,
     pub ports: Vec<RemotePort>,
-    /// Ports the sandbox advertises for forwarding (`nettle-port`), listening
-    /// or not.
+    /// Ports the sandbox advertises for forwarding (`nettle-port`, and the
+    /// ports of its services), listening or not.
     pub advertised: Vec<AdvertisedPort>,
+    /// Background services managed by `sbx-svc` in the sandbox.
+    pub services: Vec<SandboxService>,
+}
+
+/// One `sbx-svc` service of a sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxService {
+    pub name: String,
+    pub running: bool,
+    pub port: Option<u16>,
+    /// Started whenever the sandbox starts.
+    pub autostart: bool,
+    pub command: String,
 }
 
 /// A port a sandbox asks nettle to forward: `/etc/nettle/ports` (defaults set

@@ -13,6 +13,10 @@
 //! `~/.config/nettle/ports` for what the agent adds, one `PORT [label]` per
 //! line). Advertised ports are forwarded to the same local port as soon as
 //! they listen, unless that local port is already taken.
+//!
+//! Background services run through `sbx-svc` in the sandbox (sbx-forge's
+//! services kit); their state comes with the scan and nettle can start, stop
+//! and tail them. A service's port counts as advertised.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -23,7 +27,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::ConfigStore;
-use crate::ipc::types::{AdvertisedPort, LogLevel, RemotePort, SandboxInfo, SandboxesChanged};
+use crate::ipc::types::{
+    AdvertisedPort, LogLevel, RemotePort, SandboxInfo, SandboxService, SandboxesChanged,
+};
 use crate::ports::docker;
 use crate::ports::forwards::{ForwardManager, Target};
 use crate::ports::parse;
@@ -74,6 +80,7 @@ pub fn parse_ls(output: &str) -> Option<Vec<SandboxInfo>> {
             workspaces: e.workspaces,
             ports: Vec::new(),
             advertised: Vec::new(),
+            services: Vec::new(),
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -82,11 +89,13 @@ pub fn parse_ls(output: &str) -> Option<Vec<SandboxInfo>> {
 
 /// Runs inside a sandbox: listening sockets (`ss` when the image has it,
 /// otherwise procfs), the advertised ports (defaults first, so the agent's
-/// file wins) and the containers its docker daemon publishes. Must not contain
+/// file wins), its `sbx-svc` services and the containers its docker daemon
+/// publishes. Must not contain
 /// single quotes — it is wrapped in `sh -c '…'`.
 const INNER_SCAN: &str = "if command -v ss >/dev/null 2>&1; then echo @@SS; ss -tlnp 2>/dev/null; \
 else echo @@PROC; cat /proc/net/tcp /proc/net/tcp6 2>/dev/null; fi; \
 echo @@ADV; cat /etc/nettle/ports ~/.config/nettle/ports 2>/dev/null; echo; \
+echo @@SVC; sbx-svc ls --tsv 2>/dev/null; \
 echo @@DOCKER; docker ps --format \"{{.Names}}|{{.Ports}}\" 2>/dev/null";
 
 /// One host command scanning every given (running) sandbox in turn. Never
@@ -102,11 +111,12 @@ pub fn scan_command(names: &[&str]) -> String {
     cmd
 }
 
-/// One sandbox's scan: listening ports and advertised ports.
+/// One sandbox's scan: listening ports, advertised ports, services.
 #[derive(Debug, Default)]
 pub struct SandboxScan {
     pub ports: Vec<RemotePort>,
     pub advertised: Vec<AdvertisedPort>,
+    pub services: Vec<SandboxService>,
 }
 
 /// Split the combined scan output back into per-sandbox results.
@@ -117,6 +127,7 @@ pub fn parse_scan(output: &str) -> HashMap<String, SandboxScan> {
         Ss,
         Proc,
         Adv,
+        Svc,
         Docker,
     }
     #[derive(Default)]
@@ -124,6 +135,7 @@ pub fn parse_scan(output: &str) -> HashMap<String, SandboxScan> {
         ss: String,
         proc_net: String,
         adv: String,
+        svc: String,
         docker_ps: String,
     }
     let mut out = HashMap::new();
@@ -133,9 +145,23 @@ pub fn parse_scan(output: &str) -> HashMap<String, SandboxScan> {
         rows.extend(parse::parse_proc_net(&raw.proc_net));
         let mut rows = parse::dedupe_by_port(rows);
         docker::annotate(&mut rows, &docker::parse_docker_ps(&raw.docker_ps));
+        let services = parse_services(&raw.svc);
+        let mut advertised = parse_advertised(&raw.adv);
+        for svc in &services {
+            if let Some(port) = svc.port {
+                if !advertised.iter().any(|a| a.port == port) {
+                    advertised.push(AdvertisedPort {
+                        port,
+                        label: Some(svc.name.clone()),
+                    });
+                }
+            }
+        }
+        advertised.sort_by_key(|a| a.port);
         let scan = SandboxScan {
             ports: rows,
-            advertised: parse_advertised(&raw.adv),
+            advertised,
+            services,
         };
         out.insert(name.clone(), scan);
     };
@@ -155,12 +181,14 @@ pub fn parse_scan(output: &str) -> HashMap<String, SandboxScan> {
             "@@SS" => section = Section::Ss,
             "@@PROC" => section = Section::Proc,
             "@@ADV" => section = Section::Adv,
+            "@@SVC" => section = Section::Svc,
             "@@DOCKER" => section = Section::Docker,
             _ => {
                 let buf = match section {
                     Section::Ss => &mut raw.ss,
                     Section::Proc => &mut raw.proc_net,
                     Section::Adv => &mut raw.adv,
+                    Section::Svc => &mut raw.svc,
                     Section::Docker => &mut raw.docker_ps,
                     Section::None => continue,
                 };
@@ -202,6 +230,57 @@ pub fn parse_advertised(text: &str) -> Vec<AdvertisedPort> {
         .collect();
     out.sort_by_key(|a| a.port);
     out
+}
+
+/// Parse `sbx-svc ls --tsv`: NAME, running|stopped, PORT or -, yes|no, COMMAND.
+pub fn parse_services(text: &str) -> Vec<SandboxService> {
+    text.lines()
+        .filter_map(|line| {
+            let mut f = line.splitn(5, '\t');
+            let name = f.next()?.trim();
+            if !valid_name(name) {
+                return None;
+            }
+            let running = f.next()? == "running";
+            let port = f.next()?.parse::<u16>().ok().filter(|p| *p != 0);
+            let autostart = f.next()? == "yes";
+            let command = f.next().unwrap_or("").to_string();
+            Some(SandboxService {
+                name: name.to_string(),
+                running,
+                port,
+                autostart,
+                command,
+            })
+        })
+        .collect()
+}
+
+/// `sbx-svc` actions nettle runs in a sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+/// Run a service action in the sandbox, then list its services again.
+pub fn service_command(sandbox: &str, service: &str, action: ServiceAction) -> String {
+    let verb = match action {
+        ServiceAction::Start => "start",
+        ServiceAction::Stop => "stop",
+        ServiceAction::Restart => "restart",
+    };
+    exec_in_command(
+        sandbox,
+        &format!("sbx-svc {verb} {service} >&2; echo @@SVC; sbx-svc ls --tsv"),
+    )
+}
+
+/// The last `lines` lines of a service's log.
+pub fn service_logs_command(sandbox: &str, service: &str, lines: u32) -> String {
+    exec_in_command(sandbox, &format!("sbx-svc logs {service} -n {lines} 2>&1"))
 }
 
 /// Forward newly listening advertised ports to the same local port. Each
@@ -440,6 +519,7 @@ async fn scan_once(
             let scan = scans.remove(&s.name).unwrap_or_default();
             s.ports = scan.ports;
             s.advertised = scan.advertised;
+            s.services = scan.services;
         }
     }
     state.sandboxes = sandboxes;
@@ -535,6 +615,41 @@ LISTEN 0      511          *:5173            *:*     users:((\"node\",pid=42,fd=
         assert_eq!(a[0].label, None);
         assert_eq!(a[1].label.as_deref(), Some("oauth2-proxy"));
         assert!(map["b"].advertised.is_empty());
+    }
+
+    #[test]
+    fn reads_services_and_advertises_their_ports() {
+        let out = "@@SBX a\n@@PROC\n@@ADV\n4180 oauth2-proxy\n\n@@SVC\n\
+web\trunning\t5173\tyes\tnpm run dev -- --host\n\
+proxy\tstopped\t4180\tno\toauth2-proxy --config x\n\
+worker\tstopped\t-\tno\twhile true; do echo\tx; done\n\
+bad name\trunning\t1\tyes\tx\n\
+@@DOCKER\n";
+        let a = &parse_scan(out)["a"];
+        let names: Vec<&str> = a.services.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["web", "proxy", "worker"]);
+        assert!(a.services[0].running && a.services[0].autostart);
+        assert_eq!(a.services[0].port, Some(5173));
+        assert_eq!(a.services[0].command, "npm run dev -- --host");
+        assert_eq!(a.services[2].port, None);
+        assert_eq!(a.services[2].command, "while true; do echo\tx; done");
+        // service ports are advertised; an explicit advertisement keeps its label
+        let adv: Vec<(u16, Option<&str>)> = a
+            .advertised
+            .iter()
+            .map(|x| (x.port, x.label.as_deref()))
+            .collect();
+        assert_eq!(adv, vec![(4180, Some("oauth2-proxy")), (5173, Some("web"))]);
+    }
+
+    #[test]
+    fn service_commands_quote_safely() {
+        let c = service_command("sb-a", "web", ServiceAction::Restart);
+        assert!(c.contains(
+            "sbx exec sb-a sh -c 'sbx-svc restart web >&2; echo @@SVC; sbx-svc ls --tsv'"
+        ));
+        let l = service_logs_command("sb-a", "web", 300);
+        assert!(l.contains("sh -c 'sbx-svc logs web -n 300 2>&1'"));
     }
 
     #[test]

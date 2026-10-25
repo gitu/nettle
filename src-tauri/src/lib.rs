@@ -74,6 +74,8 @@ pub fn run() {
             commands::forward_set,
             commands::forward_list,
             commands::list_sandboxes,
+            commands::sandbox_service,
+            commands::sandbox_service_logs,
             commands::probe_port_scheme,
             commands::all_forwards,
             commands::port_ignore,

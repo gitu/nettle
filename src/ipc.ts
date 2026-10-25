@@ -107,9 +107,22 @@ export interface SandboxInfo {
   workspaces: string[];
   /** listening ports inside the sandbox (only scanned while running) */
   ports: RemotePort[];
-  /** ports the sandbox asks to have forwarded, listening or not */
+  /** ports the sandbox asks to have forwarded (incl. its services'), listening or not */
   advertised: AdvertisedPort[];
+  /** background services managed by `sbx-svc` in the sandbox */
+  services: SandboxService[];
 }
+
+export interface SandboxService {
+  name: string;
+  running: boolean;
+  port: number | null;
+  /** started whenever the sandbox starts */
+  autostart: boolean;
+  command: string;
+}
+
+export type ServiceAction = 'start' | 'stop' | 'restart';
 
 export interface AdvertisedPort {
   port: number;
@@ -276,6 +289,10 @@ export const api = {
       sandbox: sandbox ?? null,
     }),
   forwardList: (hostId: string) => invoke<ForwardInfo[]>('forward_list', { hostId }),
+  sandboxService: (hostId: string, sandbox: string, service: string, action: ServiceAction) =>
+    invoke<SandboxService[]>('sandbox_service', { hostId, sandbox, service, action }),
+  sandboxServiceLogs: (hostId: string, sandbox: string, service: string, lines?: number) =>
+    invoke<string>('sandbox_service_logs', { hostId, sandbox, service, lines: lines ?? null }),
   listSandboxes: (hostId: string) => invoke<SandboxesChanged | null>('list_sandboxes', { hostId }),
   probePortScheme: (hostId: string, port: number, sandbox?: string | null) =>
     invoke<'http' | 'https'>('probe_port_scheme', { hostId, port, sandbox: sandbox ?? null }),

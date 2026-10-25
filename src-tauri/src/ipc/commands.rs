@@ -547,6 +547,66 @@ pub(crate) fn sandbox_target(sandbox: Option<String>, port: u16) -> Result<Targe
     Ok(Target { sandbox, port })
 }
 
+/// Start, stop or restart an `sbx-svc` service in a sandbox; returns the
+/// sandbox's services afterwards (the next scan confirms them too).
+#[tauri::command]
+pub async fn sandbox_service(
+    state: State<'_, AppState>,
+    host_id: Uuid,
+    sandbox: String,
+    service: String,
+    action: sandbox::ServiceAction,
+) -> Result<Vec<crate::ipc::types::SandboxService>> {
+    let session = with_session(&state, host_id).await?;
+    let epoch = crate::ssh::current_epoch(&session.epoch_rx).ok_or(NettleError::NotConnected)?;
+    if !sandbox::valid_name(&sandbox) || !sandbox::valid_name(&service) {
+        return Err(NettleError::Msg("invalid sandbox or service name".into()));
+    }
+    let (out, _) = crate::ssh::exec_capture(
+        &epoch.handle,
+        &sandbox::service_command(&sandbox, &service, action),
+    )
+    .await?;
+    let services = out
+        .split_once("@@SVC\n")
+        .map(|(_, list)| sandbox::parse_services(list))
+        .ok_or_else(|| {
+            NettleError::Msg(format!(
+                "sbx-svc isn't available in sandbox {sandbox} (sbx-forge services kit)"
+            ))
+        })?;
+    state.ui.log(
+        LogLevel::Info,
+        Some(host_id),
+        "sandbox",
+        format!("{action:?} service {service} in sandbox {sandbox}").to_lowercase(),
+    );
+    Ok(services)
+}
+
+/// The tail of a sandbox service's log (`sbx-svc logs NAME -n LINES`).
+#[tauri::command]
+pub async fn sandbox_service_logs(
+    state: State<'_, AppState>,
+    host_id: Uuid,
+    sandbox: String,
+    service: String,
+    lines: Option<u32>,
+) -> Result<String> {
+    let session = with_session(&state, host_id).await?;
+    let epoch = crate::ssh::current_epoch(&session.epoch_rx).ok_or(NettleError::NotConnected)?;
+    if !sandbox::valid_name(&sandbox) || !sandbox::valid_name(&service) {
+        return Err(NettleError::Msg("invalid sandbox or service name".into()));
+    }
+    let lines = lines.unwrap_or(500).clamp(1, 5000);
+    let (out, _) = crate::ssh::exec_capture(
+        &epoch.handle,
+        &sandbox::service_logs_command(&sandbox, &service, lines),
+    )
+    .await?;
+    Ok(out)
+}
+
 /// Latest Docker sandbox snapshot for a host (hydration counterpart of the
 /// `sandboxes-changed` event); `None` until the first scan finished.
 #[tauri::command]
