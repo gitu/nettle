@@ -125,12 +125,17 @@ pub struct Settings {
     /// switching to another host.
     #[serde(default = "default_true")]
     pub keep_connections: bool,
+    /// Forward ports a Docker sandbox advertises (`nettle-port`) to the same
+    /// local port as soon as they listen, unless that local port is taken.
+    #[serde(default = "default_true")]
+    pub auto_forward_advertised: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             keep_connections: true,
+            auto_forward_advertised: true,
         }
     }
 }
@@ -146,6 +151,7 @@ mod tests {
     #[test]
     fn settings_default_keeps_connections() {
         assert!(Settings::default().keep_connections);
+        assert!(Settings::default().auto_forward_advertised);
     }
 
     #[test]
@@ -154,12 +160,14 @@ mod tests {
         // deserialize with keepConnections defaulting to on.
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(s.keep_connections);
+        assert!(s.auto_forward_advertised);
     }
 
     #[test]
     fn settings_round_trip_preserves_false() {
         let json = serde_json::to_string(&Settings {
             keep_connections: false,
+            auto_forward_advertised: true,
         })
         .unwrap();
         assert!(json.contains("keepConnections"));
@@ -197,6 +205,7 @@ mod tests {
             ignored_ports: vec![],
             settings: Settings {
                 keep_connections: false,
+                auto_forward_advertised: false,
             },
             sets: vec![ConnectionSet {
                 id: Uuid::new_v4(),
@@ -213,6 +222,7 @@ mod tests {
         assert_eq!(back.pinned_forwards[0].sandbox, None);
         assert_eq!(back.pinned_forwards[1].sandbox.as_deref(), Some("claude-a"));
         assert!(!back.settings.keep_connections);
+        assert!(!back.settings.auto_forward_advertised);
         assert_eq!(back.sets.len(), 1);
         assert_eq!(back.sets[0].name, "dev");
         assert_eq!(back.sets[0].host_ids, vec![host]);

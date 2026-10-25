@@ -160,6 +160,7 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
     let sandbox_task = sandbox::spawn(
         ui.clone(),
         host_id,
+        state.store.clone(),
         epoch_rx.clone(),
         forwards.clone(),
         sandbox_live_tx,

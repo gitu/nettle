@@ -8,6 +8,11 @@
 //! needs nothing published on the host (`sbx ports`), reaches services bound
 //! to the sandbox's loopback, and lets the same local port follow whichever
 //! sandbox the user switches to.
+//!
+//! A sandbox can also *advertise* ports (`/etc/nettle/ports` for defaults,
+//! `~/.config/nettle/ports` for what the agent adds, one `PORT [label]` per
+//! line). Advertised ports are forwarded to the same local port as soon as
+//! they listen, unless that local port is already taken.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -17,9 +22,10 @@ use serde::Deserialize;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::ipc::types::{LogLevel, RemotePort, SandboxInfo, SandboxesChanged};
+use crate::config::ConfigStore;
+use crate::ipc::types::{AdvertisedPort, LogLevel, RemotePort, SandboxInfo, SandboxesChanged};
 use crate::ports::docker;
-use crate::ports::forwards::ForwardManager;
+use crate::ports::forwards::{ForwardManager, Target};
 use crate::ports::parse;
 use crate::ssh::{exec_capture, ConnectionEpoch, EpochRx};
 use crate::state::UiBridge;
@@ -67,6 +73,7 @@ pub fn parse_ls(output: &str) -> Option<Vec<SandboxInfo>> {
             status: e.status,
             workspaces: e.workspaces,
             ports: Vec::new(),
+            advertised: Vec::new(),
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -74,10 +81,12 @@ pub fn parse_ls(output: &str) -> Option<Vec<SandboxInfo>> {
 }
 
 /// Runs inside a sandbox: listening sockets (`ss` when the image has it,
-/// otherwise procfs) plus the containers its docker daemon publishes. Must not
-/// contain single quotes — it is wrapped in `sh -c '…'`.
+/// otherwise procfs), the advertised ports (defaults first, so the agent's
+/// file wins) and the containers its docker daemon publishes. Must not contain
+/// single quotes — it is wrapped in `sh -c '…'`.
 const INNER_SCAN: &str = "if command -v ss >/dev/null 2>&1; then echo @@SS; ss -tlnp 2>/dev/null; \
 else echo @@PROC; cat /proc/net/tcp /proc/net/tcp6 2>/dev/null; fi; \
+echo @@ADV; cat /etc/nettle/ports ~/.config/nettle/ports 2>/dev/null; echo; \
 echo @@DOCKER; docker ps --format \"{{.Names}}|{{.Ports}}\" 2>/dev/null";
 
 /// One host command scanning every given (running) sandbox in turn. Never
@@ -93,34 +102,51 @@ pub fn scan_command(names: &[&str]) -> String {
     cmd
 }
 
-/// Split the combined scan output back into per-sandbox port lists.
-pub fn parse_scan(output: &str) -> HashMap<String, Vec<RemotePort>> {
+/// One sandbox's scan: listening ports and advertised ports.
+#[derive(Debug, Default)]
+pub struct SandboxScan {
+    pub ports: Vec<RemotePort>,
+    pub advertised: Vec<AdvertisedPort>,
+}
+
+/// Split the combined scan output back into per-sandbox results.
+pub fn parse_scan(output: &str) -> HashMap<String, SandboxScan> {
     #[derive(Clone, Copy)]
     enum Section {
         None,
         Ss,
         Proc,
+        Adv,
         Docker,
     }
+    #[derive(Default)]
+    struct Raw {
+        ss: String,
+        proc_net: String,
+        adv: String,
+        docker_ps: String,
+    }
     let mut out = HashMap::new();
-    let mut flush = |name: &Option<String>, ss: &str, proc_net: &str, docker_ps: &str| {
+    let mut flush = |name: &Option<String>, raw: &Raw| {
         let Some(name) = name else { return };
-        let mut rows = parse::parse_ss(ss);
-        rows.extend(parse::parse_proc_net(proc_net));
+        let mut rows = parse::parse_ss(&raw.ss);
+        rows.extend(parse::parse_proc_net(&raw.proc_net));
         let mut rows = parse::dedupe_by_port(rows);
-        docker::annotate(&mut rows, &docker::parse_docker_ps(docker_ps));
-        out.insert(name.clone(), rows);
+        docker::annotate(&mut rows, &docker::parse_docker_ps(&raw.docker_ps));
+        let scan = SandboxScan {
+            ports: rows,
+            advertised: parse_advertised(&raw.adv),
+        };
+        out.insert(name.clone(), scan);
     };
 
     let mut name: Option<String> = None;
     let mut section = Section::None;
-    let (mut ss, mut proc_net, mut docker_ps) = (String::new(), String::new(), String::new());
+    let mut raw = Raw::default();
     for line in output.lines() {
         if let Some(next) = line.strip_prefix("@@SBX ") {
-            flush(&name, &ss, &proc_net, &docker_ps);
-            ss.clear();
-            proc_net.clear();
-            docker_ps.clear();
+            flush(&name, &raw);
+            raw = Raw::default();
             name = Some(next.trim().to_string());
             section = Section::None;
             continue;
@@ -128,12 +154,14 @@ pub fn parse_scan(output: &str) -> HashMap<String, Vec<RemotePort>> {
         match line.trim() {
             "@@SS" => section = Section::Ss,
             "@@PROC" => section = Section::Proc,
+            "@@ADV" => section = Section::Adv,
             "@@DOCKER" => section = Section::Docker,
             _ => {
                 let buf = match section {
-                    Section::Ss => &mut ss,
-                    Section::Proc => &mut proc_net,
-                    Section::Docker => &mut docker_ps,
+                    Section::Ss => &mut raw.ss,
+                    Section::Proc => &mut raw.proc_net,
+                    Section::Adv => &mut raw.adv,
+                    Section::Docker => &mut raw.docker_ps,
                     Section::None => continue,
                 };
                 buf.push_str(line);
@@ -141,8 +169,111 @@ pub fn parse_scan(output: &str) -> HashMap<String, Vec<RemotePort>> {
             }
         }
     }
-    flush(&name, &ss, &proc_net, &docker_ps);
+    flush(&name, &raw);
     out
+}
+
+/// Parse advertised ports: `PORT [label]` per line, `#` comments. A later
+/// line for the same port wins (the agent's file overrides the defaults).
+pub fn parse_advertised(text: &str) -> Vec<AdvertisedPort> {
+    let mut by_port: HashMap<u16, Option<String>> = HashMap::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let Some(port) = parts.next().and_then(|p| p.parse::<u16>().ok()) else {
+            continue;
+        };
+        if port == 0 {
+            continue;
+        }
+        let label: String = parts
+            .next()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(60)
+            .collect();
+        by_port.insert(port, (!label.is_empty()).then_some(label));
+    }
+    let mut out: Vec<AdvertisedPort> = by_port
+        .into_iter()
+        .map(|(port, label)| AdvertisedPort { port, label })
+        .collect();
+    out.sort_by_key(|a| a.port);
+    out
+}
+
+/// Forward newly listening advertised ports to the same local port. Each
+/// (sandbox, port) is tried once while it stays advertised, so a forward the
+/// user stops stays stopped; a local port that already tunnels elsewhere is
+/// left alone (the UI offers "switch here").
+async fn auto_forward(
+    ui: &UiBridge,
+    host_id: uuid::Uuid,
+    store: &ConfigStore,
+    forwards: &Arc<ForwardManager>,
+    state: &SandboxesChanged,
+    tried: &mut HashSet<(String, u16)>,
+) {
+    let advertised: HashSet<(String, u16)> = state
+        .sandboxes
+        .iter()
+        .flat_map(|s| s.advertised.iter().map(|a| (s.name.clone(), a.port)))
+        .collect();
+    tried.retain(|key| advertised.contains(key));
+
+    let candidates: Vec<(&SandboxInfo, &AdvertisedPort)> = state
+        .sandboxes
+        .iter()
+        .flat_map(|s| s.advertised.iter().map(move |a| (s, a)))
+        .filter(|(s, a)| {
+            s.ports.iter().any(|p| p.port == a.port) && !tried.contains(&(s.name.clone(), a.port))
+        })
+        .collect();
+    if candidates.is_empty() || !store.load_state().await.settings.auto_forward_advertised {
+        return;
+    }
+    for (sb, adv) in candidates {
+        tried.insert((sb.name.clone(), adv.port));
+        let target = Target {
+            sandbox: Some(sb.name.clone()),
+            port: adv.port,
+        };
+        if forwards.has_target(&target) {
+            continue;
+        }
+        let what = adv
+            .label
+            .as_deref()
+            .map(|l| format!(" ({l})"))
+            .unwrap_or_default();
+        if let Some(holder) = forwards.local_target(adv.port) {
+            ui.log(
+                LogLevel::Info,
+                Some(host_id),
+                "forward",
+                format!(
+                    "{target}{what} is advertised, but localhost:{} tunnels to {holder}; switch it from the ports tab",
+                    adv.port
+                ),
+            );
+            continue;
+        }
+        // Bind failures are logged by the forward manager.
+        if forwards
+            .set_target(target.clone(), adv.port, true, false)
+            .await
+            .is_ok()
+        {
+            ui.log(
+                LogLevel::Info,
+                Some(host_id),
+                "forward",
+                format!("auto-forwarded advertised {target}{what}"),
+            );
+        }
+    }
 }
 
 /// Loopback address to dial inside the sandbox for a port bound to `bind`:
@@ -177,11 +308,14 @@ pub fn exec_in_command(name: &str, cmd: &str) -> String {
 pub fn spawn(
     ui: Arc<UiBridge>,
     host_id: uuid::Uuid,
+    store: ConfigStore,
     mut epoch_rx: EpochRx,
     forwards: Arc<ForwardManager>,
     live_tx: watch::Sender<SandboxPorts>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // Outlives epochs: a reconnect doesn't re-forward what the user stopped.
+        let mut tried: HashSet<(String, u16)> = HashSet::new();
         loop {
             let epoch: Arc<ConnectionEpoch> = loop {
                 if let Some(e) = epoch_rx.borrow().clone() {
@@ -247,6 +381,9 @@ pub fn spawn(
                     }
                     ui.emit_sandboxes(&state);
                     forwards.on_ports_update(&HashSet::new());
+                    if state.error.is_none() {
+                        auto_forward(&ui, host_id, &store, &forwards, &state, &mut tried).await;
+                    }
                     prev = Some(state);
                 }
 
@@ -298,9 +435,11 @@ async fn scan_once(
         .collect();
     if !running.is_empty() {
         let (out, _) = exec_capture(&epoch.handle, &scan_command(&running)).await?;
-        let mut ports = parse_scan(&out);
+        let mut scans = parse_scan(&out);
         for s in sandboxes.iter_mut() {
-            s.ports = ports.remove(&s.name).unwrap_or_default();
+            let scan = scans.remove(&s.name).unwrap_or_default();
+            s.ports = scan.ports;
+            s.advertised = scan.advertised;
         }
     }
     state.sandboxes = sandboxes;
@@ -364,14 +503,14 @@ State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n\
 LISTEN 0      511          *:5173            *:*     users:((\"node\",pid=42,fd=20))\n\
 @@DOCKER\n";
         let map = parse_scan(out);
-        let a = &map["a"];
+        let a = &map["a"].ports;
         assert_eq!(
             a.iter().map(|p| p.port).collect::<Vec<_>>(),
             vec![4180, 8080]
         );
         assert_eq!(a[0].bind, "127.0.0.1");
         assert_eq!(a[1].container.as_deref(), Some("web"));
-        let b = &map["b"];
+        let b = &map["b"].ports;
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].port, 5173);
         assert_eq!(b[0].process.as_deref(), Some("node"));
@@ -380,8 +519,42 @@ LISTEN 0      511          *:5173            *:*     users:((\"node\",pid=42,fd=
     #[test]
     fn sandbox_without_output_has_no_ports() {
         let map = parse_scan("@@SBX a\n@@SBX b\n@@PROC\n");
-        assert!(map["a"].is_empty());
-        assert!(map["b"].is_empty());
+        assert!(map["a"].ports.is_empty());
+        assert!(map["b"].ports.is_empty());
+        assert!(map["b"].advertised.is_empty());
+    }
+
+    #[test]
+    fn reads_advertised_ports_per_sandbox() {
+        let out = "@@SBX a\n@@PROC\n@@ADV\n4180 oauth2-proxy\n3000\n\n@@DOCKER\n\
+@@SBX b\n@@PROC\n@@ADV\n\n@@DOCKER\n";
+        let map = parse_scan(out);
+        let a = &map["a"].advertised;
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].port, 3000);
+        assert_eq!(a[0].label, None);
+        assert_eq!(a[1].label.as_deref(), Some("oauth2-proxy"));
+        assert!(map["b"].advertised.is_empty());
+    }
+
+    #[test]
+    fn parses_advertised_lines() {
+        let text = "# defaults\n4180 oauth2 proxy  # login\n8080\n\
+nope\n0 zero\n70000 too big\n  5173\tvite dev\n8080 api\n";
+        let adv = parse_advertised(text);
+        let got: Vec<(u16, Option<&str>)> =
+            adv.iter().map(|a| (a.port, a.label.as_deref())).collect();
+        assert_eq!(
+            got,
+            vec![
+                (4180, Some("oauth2 proxy")),
+                (5173, Some("vite dev")),
+                // the later line wins: the agent's file overrides the defaults
+                (8080, Some("api")),
+            ]
+        );
+        let long = format!("9000 {}\u{7}", "x".repeat(100));
+        assert_eq!(parse_advertised(&long)[0].label.as_ref().unwrap().len(), 60);
     }
 
     #[test]

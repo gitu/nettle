@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import type { ForwardInfo, RemotePort, SandboxInfo } from '../ipc';
+import type { AdvertisedPort, ForwardInfo, RemotePort, SandboxInfo } from '../ipc';
 import { shortDir } from '../util';
 import { openPortInBrowser } from '../openPort';
 
@@ -231,18 +231,20 @@ function SandboxBar({
   );
 }
 
-/** Every port appears exactly once, in one of three states. */
-type RowState = 'open' | 'forwarded' | 'waiting';
+/** Every port appears exactly once, in one of four states. */
+type RowState = 'open' | 'forwarded' | 'waiting' | 'advertised';
 
 const STATE_LABEL: Record<RowState, string> = {
   open: 'open on host',
   forwarded: 'forwarded',
   waiting: 'waiting for process',
+  advertised: 'advertised · not listening',
 };
 
 const NO_PORTS: RemotePort[] = [];
 const NO_FORWARDS: ForwardInfo[] = [];
 const NO_SANDBOXES: SandboxInfo[] = [];
+const NO_ADVERTISED: AdvertisedPort[] = [];
 
 export function PortsView() {
   const hostId = useStore((s) => s.focusedHostId);
@@ -275,6 +277,8 @@ export function PortsView() {
   const ports = sandbox ? sandbox.ports : hostPorts;
   const unsupported = sandbox ? false : hostUnsupported;
   const forwards = allForwards.filter((f) => f.sandbox === target);
+  const advertised = sandbox?.advertised ?? NO_ADVERTISED;
+  const advLabel = new Map<number, string | null>(advertised.map((a) => [a.port, a.label]));
   // Local ports already tunnelling to *another* target of this host — a
   // forward on one of them switches it over instead of binding a new one.
   const localElsewhere = new Map<number, ForwardInfo>(
@@ -299,10 +303,20 @@ export function PortsView() {
     ...forwards
       .filter((f) => !scannedPorts.has(f.port))
       .map((f) => ({ port: f.port, info: null, fwd: f })),
+    // Advertised by the sandbox but nothing listens yet (and not forwarded)
+    ...advertised
+      .filter((a) => !scannedPorts.has(a.port) && !fwdByPort.has(a.port))
+      .map((a) => ({ port: a.port, info: null, fwd: null })),
   ]
     .map((r) => ({
       ...r,
-      state: (r.fwd ? (r.fwd.live ? 'forwarded' : 'waiting') : 'open') as RowState,
+      state: (r.fwd
+        ? r.fwd.live
+          ? 'forwarded'
+          : 'waiting'
+        : r.info
+          ? 'open'
+          : 'advertised') as RowState,
     }))
     .sort((a, b) => rank(a) - rank(b) || a.port - b.port);
 
@@ -399,6 +413,8 @@ export function PortsView() {
           const listening = info != null;
           const dir = shortDir(info?.cwd);
           const holder = fwd ? null : (localElsewhere.get(port) ?? null);
+          const adv = advLabel.has(port);
+          const label = advLabel.get(port) ?? null;
           return (
             <div key={port} className={`prow${fwd ? ' fwd' : ''}`}>
               <div className="pcol-port" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -407,7 +423,15 @@ export function PortsView() {
               </div>
               <div className="pcol-proc" style={{ minWidth: 0 }}>
                 <div className="pproc">
-                  {info?.process ?? '—'}
+                  {adv && (
+                    <span
+                      className="padvertised"
+                      title="advertised by the sandbox (nettle-port): forwarded as soon as it listens"
+                    >
+                      ★ {label ?? 'advertised'}
+                    </span>
+                  )}
+                  {info?.process ?? (adv ? '' : '—')}
                   {info?.container && (
                     <span className="pcontainer" title={`docker container: ${info.container}`}>
                       ⬡ {info.container}
@@ -424,7 +448,9 @@ export function PortsView() {
                 {info ? `${info.bind}:${port}` : '—'}
               </span>
               <span className="pcol-state">
-                <span className={`state-chip ${state}`}>{STATE_LABEL[state]}</span>
+                <span className={`state-chip ${state}`}>
+                  {state === 'open' && target ? 'listening' : STATE_LABEL[state]}
+                </span>
               </span>
               <div className="pcol-local">
                 {holder ? (

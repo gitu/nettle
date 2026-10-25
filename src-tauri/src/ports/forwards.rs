@@ -136,6 +136,24 @@ impl ForwardManager {
         }
     }
 
+    /// `target` is forwarded (to any local port).
+    pub fn has_target(&self, target: &Target) -> bool {
+        self.entries
+            .lock()
+            .unwrap()
+            .values()
+            .any(|e| &e.target == target)
+    }
+
+    /// What the listener on `local_port` currently tunnels to, if any.
+    pub fn local_target(&self, local_port: u16) -> Option<Target> {
+        self.entries
+            .lock()
+            .unwrap()
+            .get(&local_port)
+            .map(|e| e.target.clone())
+    }
+
     /// Current target and connection token of the listener on `local_port`.
     fn current(&self, local_port: u16) -> Option<(Target, CancellationToken)> {
         self.entries

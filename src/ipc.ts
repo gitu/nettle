@@ -29,6 +29,8 @@ export interface SessionInfo {
 
 export interface Settings {
   keepConnections: boolean;
+  /** forward ports a sandbox advertises (`nettle-port`) as soon as they listen */
+  autoForwardAdvertised: boolean;
 }
 
 export interface WebConfig {
@@ -105,6 +107,14 @@ export interface SandboxInfo {
   workspaces: string[];
   /** listening ports inside the sandbox (only scanned while running) */
   ports: RemotePort[];
+  /** ports the sandbox asks to have forwarded, listening or not */
+  advertised: AdvertisedPort[];
+}
+
+export interface AdvertisedPort {
+  port: number;
+  /** what runs there, e.g. "oauth2-proxy" */
+  label: string | null;
 }
 
 export interface SandboxesChanged {

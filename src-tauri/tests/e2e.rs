@@ -588,6 +588,7 @@ async fn local_port_switches_between_host_and_sandbox() {
     let scanner = sandbox::spawn(
         h.ui.clone(),
         h.host.id,
+        h.store.clone(),
         h.epoch_rx.clone(),
         forwards.clone(),
         sbx_tx,
@@ -657,6 +658,42 @@ async fn local_port_switches_between_host_and_sandbox() {
     assert!(forwards.list().is_empty());
     assert!(h.store.load_state().await.pinned_forwards.is_empty());
 
+    // Advertised by the sandbox (`nettle-port`): forwarded to the same local
+    // port once it listens, through the sandbox bridge.
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        &format!("mkdir -p ~/.config/nettle && echo '{remote_port} sshd' > ~/.config/nettle/ports"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(0));
+    let auto = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(f) = forwards.list().into_iter().next() {
+                return f;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("advertised port auto-forwarded");
+    assert_eq!(auto.sandbox.as_deref(), Some("sb-a"));
+    assert_eq!(auto.local_port, remote_port);
+    assert!(!auto.pinned);
+    assert!(banner_through(remote_port).await.starts_with("via-sbx"));
+
+    // Stopped by the user: stays stopped across the next scans.
+    forwards
+        .set_target(sb.clone(), 0, false, false)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    assert!(
+        forwards.list().is_empty(),
+        "a stopped auto-forward is not redone"
+    );
+
+    let _ = exec_capture(&epoch.handle, "rm -rf ~/.config/nettle").await;
     let _ = exec_capture(&epoch.handle, "rm -f ~/.local/bin/sbx").await;
     scanner.abort();
     drop(live_tx);

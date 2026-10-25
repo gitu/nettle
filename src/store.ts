@@ -100,7 +100,7 @@ interface NettleState {
 export const useStore = create<NettleState>((set, get) => ({
   hosts: [],
   sets: [],
-  settings: { keepConnections: true },
+  settings: { keepConnections: true, autoForwardAdvertised: true },
 
   sessions: {},
   focusedHostId: null,
