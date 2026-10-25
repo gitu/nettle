@@ -1,0 +1,21 @@
+{
+    "version": "@VERSION@",
+    "description": "Resilient SSH client with live port discovery and pinned tunnels",
+    "homepage": "https://github.com/gitu/nettle",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/gitu/nettle/releases/download/v@VERSION@/nettle_@VERSION@_x64_en-US.msi",
+            "hash": "@SHA_WIN@"
+        }
+    },
+    "shortcuts": [["nettle.exe", "nettle"]],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/gitu/nettle/releases/download/v$version/nettle_$version_x64_en-US.msi"
+            }
+        }
+    }
+}
