@@ -20,8 +20,8 @@ export function AboutModal() {
   if (!open) return null;
   const close = () => useStore.setState({ aboutOpen: false });
 
-  const toggleKeep = () => {
-    const next = { ...settings, keepConnections: !settings.keepConnections };
+  const toggle = (key: 'keepConnections' | 'autoForwardAdvertised') => {
+    const next = { ...settings, [key]: !settings[key] };
     useStore.setState({ settings: next });
     api.setSettings(next).catch(() => {});
   };
@@ -50,12 +50,20 @@ export function AboutModal() {
             Releases
           </button>
         </div>
-        <label className="about-setting" onClick={toggleKeep}>
+        <label className="about-setting" onClick={() => toggle('keepConnections')}>
           <span className={`toggle${settings.keepConnections ? ' on' : ''}`}>
             <span className="toggle-knob" />
           </span>
           <span className="about-setting-label">
             Keep connections open when switching hosts
+          </span>
+        </label>
+        <label className="about-setting" onClick={() => toggle('autoForwardAdvertised')}>
+          <span className={`toggle${settings.autoForwardAdvertised ? ' on' : ''}`}>
+            <span className="toggle-knob" />
+          </span>
+          <span className="about-setting-label">
+            Forward ports Docker sandboxes advertise as soon as they listen
           </span>
         </label>
         <button

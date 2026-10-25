@@ -219,6 +219,8 @@ describe('applySandboxes', () => {
     status,
     workspaces: [],
     ports: [],
+    advertised: [],
+    services: [],
   });
   const event = (sandboxes: SandboxInfo[]): SandboxesChanged => ({
     hostId: A,

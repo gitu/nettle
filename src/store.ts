@@ -15,6 +15,7 @@ import {
   type IpcError,
   type PortsChanged,
   type SandboxesChanged,
+  type ServiceAction,
   type Settings,
   type TransferMeta,
   type TransferProgress,
@@ -91,6 +92,13 @@ interface NettleState {
     force: boolean,
     sandbox?: string | null,
   ) => Promise<void>;
+  /** start/stop/restart an `sbx-svc` service in a sandbox (failures → ports banner) */
+  serviceAction: (
+    hostId: string,
+    sandbox: string,
+    service: string,
+    action: ServiceAction,
+  ) => Promise<void>;
   /** pick what the ports tab shows: the host (null) or one of its sandboxes */
   setPortsTarget: (hostId: string, sandbox: string | null) => void;
   dismissPortError: (hostId: string) => void;
@@ -100,7 +108,7 @@ interface NettleState {
 export const useStore = create<NettleState>((set, get) => ({
   hosts: [],
   sets: [],
-  settings: { keepConnections: true },
+  settings: { keepConnections: true, autoForwardAdvertised: true },
 
   sessions: {},
   focusedHostId: null,
@@ -241,6 +249,28 @@ export const useStore = create<NettleState>((set, get) => ({
           port,
           sandbox,
           message: err?.message ?? String(e),
+          hint: null,
+          pinned: false,
+        },
+      }));
+    }
+  },
+
+  serviceAction: async (hostId, sandbox, service, action) => {
+    try {
+      const services = await api.sandboxService(hostId, sandbox, service, action);
+      patchSession(set, hostId, (s) => ({
+        ...s,
+        sandboxes: s.sandboxes.map((sb) => (sb.name === sandbox ? { ...sb, services } : sb)),
+      }));
+    } catch (e: unknown) {
+      const err = e as IpcError;
+      patchSession(set, hostId, (s) => ({
+        ...s,
+        portError: {
+          port: 0,
+          sandbox,
+          message: `${service}: ${err?.message ?? String(e)}`,
           hint: null,
           pinned: false,
         },

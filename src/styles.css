@@ -2196,3 +2196,121 @@ body {
   background: color-mix(in srgb, var(--amber) 12%, transparent);
   white-space: nowrap;
 }
+.padvertised {
+  margin-right: 7px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  white-space: nowrap;
+}
+.state-chip.advertised {
+  border-style: dashed;
+}
+
+/* sbx-svc services of a sandbox (ports tab) */
+.svc-panel {
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.svc-panel-title {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  margin-bottom: 4px;
+}
+.svc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  min-width: 0;
+}
+.svc-row + .svc-row {
+  border-top: 1px solid var(--border);
+}
+.svc-name {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  flex: none;
+}
+.svc-state {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  flex: none;
+  width: 52px;
+}
+.svc-state.running {
+  color: var(--green);
+}
+.svc-port {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+  min-width: 44px;
+}
+.svc-auto {
+  font-size: 10px;
+  color: var(--acc);
+  border: 1px solid color-mix(in srgb, var(--acc) 40%, transparent);
+  border-radius: var(--radius-full);
+  padding: 0 6px;
+  flex: none;
+}
+.svc-cmd {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.svc-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.modal.svc-logs {
+  width: min(960px, 92vw);
+  max-width: none;
+  height: min(640px, 82vh);
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 10px;
+}
+.svc-logs-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.svc-logs-title {
+  font-weight: 600;
+}
+.svc-logs-sub,
+.svc-logs-live {
+  font-weight: 400;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.svc-logs-body {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--on) 4%, Canvas);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
