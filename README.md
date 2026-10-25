@@ -74,6 +74,25 @@ echo "deb [signed-by=/usr/share/keyrings/nettle.gpg] https://gitu.github.io/nett
 sudo apt update && sudo apt install nettle
 ```
 
+**Direct download (latest release, no repo setup):**
+
+```sh
+# Debian / Ubuntu
+curl -fsSL "$(curl -fsSL https://api.github.com/repos/gitu/nettle/releases/latest | grep -o 'https://[^"]*amd64\.deb')" -o nettle.deb && sudo apt install ./nettle.deb
+
+# Fedora / RHEL
+sudo dnf install "$(curl -fsSL https://api.github.com/repos/gitu/nettle/releases/latest | grep -o 'https://[^"]*x86_64\.rpm')"
+
+# Any Linux (AppImage)
+curl -fsSL "$(curl -fsSL https://api.github.com/repos/gitu/nettle/releases/latest | grep -o 'https://[^"]*amd64\.AppImage')" -o nettle.AppImage && chmod +x nettle.AppImage
+```
+
+```powershell
+# Windows
+$u = (Invoke-RestMethod https://api.github.com/repos/gitu/nettle/releases/latest).assets.browser_download_url -match 'x64_en-US\.msi$'
+Invoke-WebRequest $u -OutFile nettle.msi; msiexec /i nettle.msi
+```
+
 Or grab the latest build from [Releases](https://github.com/gitu/nettle/releases):
 `.dmg` for macOS (Apple Silicon and Intel), `.AppImage` / `.deb` / `.rpm` for
 Linux, `.msi` / `.exe` for Windows.
