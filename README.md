@@ -38,7 +38,9 @@ day-to-day work against remote dev boxes:
   (`sbx`), the ports tab lists every sandbox and the ports listening inside
   it, its docker containers included. Forward one without `sbx ports`, then
   move the same local port to another sandbox with one click (*⇄ switch here*),
-  so `localhost:4180` and the OAuth redirect on it stay the same.
+  so `localhost:4180` and the OAuth redirect on it stay the same. Ports a
+  sandbox *advertises* are forwarded as soon as they listen, and its background
+  services can be started, stopped and tailed from the app.
 - **Connection sets** — name a group of hosts and bring them all up with one
   click (e.g. "production" = api + db + cache).
 - **Tray-first** — closing the window hides nettle to the menu bar / system
@@ -123,21 +125,25 @@ on Windows, allow the SmartScreen prompt.
 
 ## Docker sandboxes
 
-When a connected host has the `sbx` CLI, nettle runs `sbx ls --json` every 5 s
-and scans each **running** sandbox with `sbx exec` (`ss`, else `/proc/net/tcp`,
-plus `docker ps`). Stopped sandboxes are listed but never started. Pick a
-sandbox in the ports tab's *target* bar to see and forward its ports.
+When a connected host has the `sbx` CLI, the ports tab gets a *target* bar with
+the host and each of its sandboxes. Nothing needs to be published with
+`sbx ports`: every tunnel is an `sbx exec -i <sandbox> socat …` bridge on an SSH
+exec channel, so services bound only to a sandbox's loopback work too.
 
-A sandbox tunnel needs nothing published on the host: each connection is an SSH
-exec channel running `sbx exec -i <sandbox> socat - TCP:127.0.0.1:<port>` (`nc`
-when the image has no socat). That reaches services bound only to the
-sandbox's loopback, and costs ~0.25 s of `sbx exec` start-up per new TCP
-connection (keep-alive connections pay it once).
+- **Switching:** forwards are keyed by local port. Forwarding sandbox B's 4180
+  while `localhost:4180` tunnels to sandbox A switches the listener in place,
+  and a pin moves with it.
+- **Advertised ports:** a sandbox lists ports in `/etc/nettle/ports` (defaults)
+  and `~/.config/nettle/ports` (the agent's), `PORT [label]` per line. nettle
+  forwards each to the same local port once it listens, unless that port is
+  taken; a forward you stop stays stopped.
+- **Services:** with an `sbx-svc` command in the sandbox, a Services panel shows
+  each service with start / stop / restart and a live log view.
+- Stopped sandboxes are listed but never started.
 
-Forwards are keyed by local port. Forwarding sandbox B's 4180 while
-`localhost:4180` tunnels to sandbox A **switches** the listener over in place:
-connections to A are closed, new ones go to B, and a pin moves with it, so after
-a reconnect the tunnel comes back pointing at B.
+Host setup, the file formats, the `sbx-svc` contract, how to make the agent
+advertise its ports, and ready-made kits ([sbx-forge](https://github.com/gitu/sbx-forge)
+or a minimal one of your own): **[docs/sandboxes.md](docs/sandboxes.md)**.
 
 ## Remote control (optional)
 
