@@ -50,6 +50,13 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
         None => hosts.push(host.clone()),
     }
     state.store.save_hosts(hosts).await?;
+    // The xdg-open options apply to a live session right away.
+    if let Some(session) = state.sessions.lock().await.get(&host.id) {
+        let options = crate::remote_open::Options::from(&host);
+        session
+            .xdg_open
+            .send_if_modified(|current| std::mem::replace(current, options) != options);
+    }
     state.ui.notify_hosts_changed();
     Ok(host)
 }
@@ -145,7 +152,7 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         state.store.clone(),
         epoch_rx.clone(),
         ports_live_rx.clone(),
-        sandbox_live_rx,
+        sandbox_live_rx.clone(),
     );
     let ignored_shared = Arc::new(StdMutex::new(ignored));
     let scanner_task = scanner::spawn(
@@ -169,6 +176,17 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
     for (target, local_port) in pins {
         let _ = forwards.set_target(target, local_port, true, true).await;
     }
+
+    let (xdg_open, xdg_open_rx) = watch::channel(crate::remote_open::Options::from(&host));
+    let opener_task = crate::remote_open::spawn(
+        ui.clone(),
+        host_id,
+        epoch_rx.clone(),
+        forwards.clone(),
+        ports_live_rx,
+        sandbox_live_rx,
+        xdg_open_rx,
+    );
 
     // Stats change on hot paths (tunnel bytes); push them to the UI at a
     // fixed low rate and only when something changed.
@@ -196,6 +214,8 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         scanner_task: StdMutex::new(Some(scanner_task)),
         sandbox_task: StdMutex::new(Some(sandbox_task)),
         stats_task: StdMutex::new(Some(stats_task)),
+        xdg_open,
+        opener_task: StdMutex::new(Some(opener_task)),
     });
     state.sessions.lock().await.insert(host_id, session);
     Ok(())
@@ -224,6 +244,11 @@ pub(crate) async fn teardown(state: &AppState, host_id: Uuid) {
         let ticker = old.stats_task.lock().unwrap().take();
         if let Some(ticker) = ticker {
             ticker.abort();
+        }
+        // The watcher on the host ends by itself once the connection is gone.
+        let opener = old.opener_task.lock().unwrap().take();
+        if let Some(opener) = opener {
+            opener.abort();
         }
         // The actor folds the uptime on Disconnect; if it didn't get there in
         // time this is a no-op for a link that already ended. Either way push

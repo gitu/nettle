@@ -28,7 +28,8 @@ use uuid::Uuid;
 use nettle_lib::config::{ConfigStore, HostConfig};
 use nettle_lib::ipc::types::{TransferDirection, TransferStatus};
 use nettle_lib::ports::forwards::{ForwardManager, Target};
-use nettle_lib::ports::sandbox;
+use nettle_lib::ports::{sandbox, scanner};
+use nettle_lib::remote_open;
 use nettle_lib::sftp::browse::SftpBrowser;
 use nettle_lib::sftp::transfers::TransferManager;
 use nettle_lib::ssh::session::{SessionActor, SessionCmd};
@@ -37,11 +38,18 @@ use nettle_lib::state::{EventSink, SecretVault, UiBridge};
 
 struct TestSink {
     tx: mpsc::UnboundedSender<(String, serde_json::Value)>,
+    /// Links the backend asked the desktop to open, in order.
+    opened: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl EventSink for TestSink {
     fn emit_json(&self, event: &str, payload: serde_json::Value) {
         let _ = self.tx.send((event.to_string(), payload));
+    }
+
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        self.opened.lock().unwrap().push(url.to_string());
+        Ok(())
     }
 }
 
@@ -49,6 +57,7 @@ struct Harness {
     ui: Arc<UiBridge>,
     vault: Arc<SecretVault>,
     events: mpsc::UnboundedReceiver<(String, serde_json::Value)>,
+    opened: Arc<std::sync::Mutex<Vec<String>>>,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     epoch_rx: EpochRx,
     store: ConfigStore,
@@ -73,7 +82,11 @@ async fn connect() -> Harness {
     let store = ConfigStore::new(tmp.path().to_path_buf());
 
     let (tx, events) = mpsc::unbounded_channel();
-    let ui = UiBridge::new(Box::new(TestSink { tx }));
+    let opened = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let ui = UiBridge::new(Box::new(TestSink {
+        tx,
+        opened: opened.clone(),
+    }));
 
     let host = HostConfig {
         id: Uuid::new_v4(),
@@ -82,6 +95,8 @@ async fn connect() -> Harness {
         port: env_or("NETTLE_E2E_PORT", "2222").parse().unwrap(),
         username: env_or("NETTLE_E2E_USER", "deploy"),
         key_path: None,
+        intercept_xdg_open: false,
+        links_take_over_ports: false,
     };
     let password = env_or("NETTLE_E2E_PASSWORD", "nettletest");
 
@@ -107,6 +122,7 @@ async fn connect() -> Harness {
         ui,
         vault,
         events,
+        opened,
         cmd_tx,
         epoch_rx,
         store,
@@ -542,24 +558,38 @@ async fn changing_local_port_rebinds_the_forward() {
 /// A stand-in `sbx` for the test sshd: `ls` reports one running sandbox, and
 /// `exec` runs the command on the host itself after a marker line, so a tunnel
 /// through the sandbox bridge is told apart from a direct one by its first bytes.
+/// A second sandbox, `sb-b`, runs while `~/.sbx-fake/two` exists. Commands "in
+/// a sandbox" find `~/.sbx-fake` first on their `PATH` and the sandbox's uid in
+/// `SBX_FAKE_UID`: a test puts an `id` there to give each a user of its own.
 const FAKE_SBX: &str = r#"#!/bin/sh
 case "$1" in
-  ls) echo '[{"name":"sb-a","agent":"shell","status":"running","workspaces":["/w"]}]' ;;
+  ls)
+    a='{"name":"sb-a","agent":"shell","status":"running","workspaces":["/w"]}'
+    b='{"name":"sb-b","agent":"shell","status":"running","workspaces":["/w"]}'
+    if [ -e "$HOME/.sbx-fake/two" ]; then echo "[$a,$b]"; else echo "[$a]"; fi ;;
   exec)
     shift
     [ "$1" = -i ] && shift
+    case "$1" in sb-b) SBX_FAKE_UID=4243 ;; *) SBX_FAKE_UID=4242 ;; esac
     shift
     echo via-sbx
+    PATH="$HOME/.sbx-fake:$PATH"
+    export PATH SBX_FAKE_UID
     exec "$@" ;;
   *) exit 2 ;;
 esac
 "#;
+
+/// Tests that share state on the remote account (the fake `sbx`, the
+/// `xdg-open` shim and its runtime directory) run one at a time.
+static REMOTE_STATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn local_port_switches_between_host_and_sandbox() {
     if !enabled() {
         return;
     }
+    let _remote = REMOTE_STATE.lock().await;
     let mut h = connect().await;
     let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
     // Leftovers of an earlier, failed run would be auto-forwarded right away.
@@ -716,6 +746,585 @@ async fn local_port_switches_between_host_and_sandbox() {
     h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
 }
 
+/// Poll `check` until it holds.
+async fn until<F, Fut>(what: &str, secs: u64, mut check: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let waited = tokio::time::timeout(Duration::from_secs(secs), async {
+        while !check().await {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "timed out waiting for {what}");
+}
+
+/// Pid of the live `xdg-open` watcher the shim would pick, once there is one
+/// other than `not` and the shim is installed.
+async fn watcher_pid(epoch: &ConnectionEpoch, not: Option<u32>) -> u32 {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let (out, exit) = exec_capture(
+                &epoch.handle,
+                "d=/tmp/nettle-$(id -u); p=$(cat $d/open.pid 2>/dev/null) && kill -0 \"$p\" \
+                 && test -p \"$d/open.$p.fifo\" && test -x ~/.local/bin/xdg-open && echo \"$p\"",
+            )
+            .await
+            .unwrap();
+            let pid = out.trim().parse::<u32>().ok();
+            if let Some(pid) = pid.filter(|p| exit == Some(0) && Some(*p) != not) {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the xdg-open watcher")
+}
+
+/// The option behind "open links from this host in my browser": the shim
+/// nettle installs as `xdg-open` reaches the local browser, with the loopback
+/// ports a sign-in needs forwarded for as long as they listen.
+#[tokio::test]
+async fn xdg_open_on_the_host_opens_links_here() {
+    if !enabled() {
+        return;
+    }
+    const CLEANUP: &str = "kill $(cat ~/open-e2e.pid 2>/dev/null) 2>/dev/null; \
+        pkill -f '[n]c -p 4326' 2>/dev/null; \
+        rm -f ~/.local/bin/xdg-open ~/.local/bin/www-browser ~/open-e2e.pid ~/open-e2e.banner; \
+        true";
+    let _remote = REMOTE_STATE.lock().await;
+    let mut h = connect().await;
+    let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
+    // Leftovers of an earlier, failed run.
+    let _ = exec_capture(&epoch.handle, CLEANUP).await;
+
+    let (live_tx, live_rx) = watch::channel(HashSet::new());
+    // Kept alive: a tunnel waiting for its port gives up when a scanner is gone.
+    let (_sbx_tx, sbx_rx) = watch::channel(Default::default());
+    let forwards = ForwardManager::new(
+        h.ui.clone(),
+        h.host.id,
+        h.store.clone(),
+        h.epoch_rx.clone(),
+        live_rx.clone(),
+        sbx_rx.clone(),
+    );
+    let scanner = scanner::spawn(
+        h.ui.clone(),
+        h.host.id,
+        h.epoch_rx.clone(),
+        forwards.clone(),
+        live_tx,
+        Default::default(),
+        h.cmd_tx.clone(),
+    );
+    let on = remote_open::Options {
+        enabled: true,
+        take_over: false,
+    };
+    let (on_tx, on_rx) = watch::channel(on);
+    let opener = remote_open::spawn(
+        h.ui.clone(),
+        h.host.id,
+        h.epoch_rx.clone(),
+        forwards.clone(),
+        live_rx,
+        sbx_rx,
+        on_rx,
+    );
+    let opened = h.opened.clone();
+    let was_opened = |link: &str| {
+        let (opened, link) = (opened.clone(), link.to_string());
+        move || {
+            let hit = opened.lock().unwrap().contains(&link);
+            async move { hit }
+        }
+    };
+    let first_watcher = watcher_pid(&epoch, None).await;
+
+    // A plain link: opened as it is, nothing forwarded.
+    let docs = "https://example.com/docs?page=2#top";
+    let (_, exit) = exec_capture(&epoch.handle, &format!("~/.local/bin/xdg-open '{docs}'"))
+        .await
+        .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the plain link", 10, was_opened(docs)).await;
+    assert!(forwards.list().is_empty());
+
+    // Not a web link: the shim hands it to the host's own xdg-open (there is
+    // none), and nettle refuses it even when written to the FIFO directly.
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        "~/.local/bin/xdg-open file:///etc/passwd 2>/dev/null",
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(3));
+    let after = "https://example.com/after-refused";
+    exec_capture(
+        &epoch.handle,
+        &format!(
+            "d=/tmp/nettle-$(id -u); \
+             printf 'open - file:///etc/passwd\\nopen - javascript:alert(1)\\n' \
+               3<>\"$d/open.$(cat $d/open.pid).fifo\" >&3; \
+             ~/.local/bin/xdg-open '{after}'"
+        ),
+    )
+    .await
+    .unwrap();
+    until("the link after the refused ones", 10, was_opened(after)).await;
+    assert_eq!(*h.opened.lock().unwrap(), [docs, after]);
+
+    // What Python and Node look for on a host without a display.
+    let console = "https://example.com/from-www-browser";
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        &format!("~/.local/bin/www-browser '{console}'"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the www-browser link", 10, was_opened(console)).await;
+
+    // A dropped link: the next connection gets a watcher of its own, and the
+    // old one notices and cleans up.
+    let old_id = epoch.id;
+    drop(epoch);
+    h.cmd_tx.send(SessionCmd::SuspectDead(old_id)).unwrap();
+    let epoch = wait_epoch(&mut h.epoch_rx, old_id + 1).await;
+    watcher_pid(&epoch, Some(first_watcher)).await;
+    until("the first watcher to clean up", 20, || async {
+        let (out, _) = exec_capture(&epoch.handle, "ls /tmp/nettle-$(id -u)/")
+            .await
+            .unwrap();
+        out.lines().filter(|f| f.ends_with(".fifo")).count() == 1
+    })
+    .await;
+
+    // A sign-in link naming its callback: that port is forwarded to the same
+    // local port before the link opens.
+    let login_port: u16 = 43260;
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        &format!(
+            "nohup sh -c 'while true; do echo via-login | nc -p {login_port} -l || sleep 1; done' \
+             >/dev/null 2>&1 & echo $! > ~/open-e2e.pid"
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(0));
+    let login = format!(
+        "https://sso.example.com/authorize?client_id=cli\
+         &redirect_uri=http%3A%2F%2F127.0.0.1%3A{login_port}%2Fcallback&state=xyz"
+    );
+    let (_, exit) = exec_capture(&epoch.handle, &format!("~/.local/bin/xdg-open '{login}'"))
+        .await
+        .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the sign-in link", 10, was_opened(&login)).await;
+    let listed = forwards.list();
+    assert_eq!(
+        listed.len(),
+        1,
+        "the callback port is forwarded: {listed:?}"
+    );
+    assert_eq!(
+        (listed[0].port, listed[0].local_port, listed[0].pinned),
+        (login_port, login_port, false)
+    );
+    let banner = banner_through(login_port).await;
+    assert!(banner.starts_with("via-login"), "got {banner:?}");
+    // The sign-in is over, the callback server gone: so is the forward.
+    exec_capture(
+        &epoch.handle,
+        &format!("kill $(cat ~/open-e2e.pid); pkill -f '[n]c -p {login_port}'; true"),
+    )
+    .await
+    .unwrap();
+    until("the callback forward to be removed", 20, || async {
+        forwards.list().is_empty()
+    })
+    .await;
+
+    // A link that doesn't name the callback: the port the calling program
+    // just opened is forwarded all the same.
+    let cli_port: u16 = 43261;
+    let cli = "https://login.example.com/cli?session=abc";
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        &format!(
+            "echo via-cli > ~/open-e2e.banner; \
+             nohup sh -c '( sleep 1; $HOME/.local/bin/xdg-open \"{cli}\" ) & \
+               exec nc -p {cli_port} -l < $HOME/open-e2e.banner' >/dev/null 2>&1 &"
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the link of the listening program", 10, was_opened(cli)).await;
+    let listed = forwards.list();
+    assert_eq!(listed.len(), 1, "its port is forwarded: {listed:?}");
+    assert_eq!(
+        (listed[0].port, listed[0].local_port, listed[0].pinned),
+        (cli_port, cli_port, false)
+    );
+    let banner = banner_through(cli_port).await;
+    assert!(banner.starts_with("via-cli"), "got {banner:?}");
+    // nc served its one connection and exited.
+    until("the program's forward to be removed", 20, || async {
+        forwards.list().is_empty()
+    })
+    .await;
+
+    // Option off: the watcher stops and the shim is removed.
+    on_tx.send(Default::default()).unwrap();
+    until("the shim to be removed", 20, || async {
+        let (_, exit) = exec_capture(
+            &epoch.handle,
+            "test ! -e ~/.local/bin/xdg-open && test ! -L ~/.local/bin/www-browser \
+             && ! ls /tmp/nettle-$(id -u)/open.* >/dev/null 2>&1",
+        )
+        .await
+        .unwrap();
+        exit == Some(0)
+    })
+    .await;
+
+    // Someone else's xdg-open in the shim's place is never overwritten.
+    exec_capture(
+        &epoch.handle,
+        "printf '#!/bin/sh\\necho mine\\n' > ~/.local/bin/xdg-open; chmod +x ~/.local/bin/xdg-open",
+    )
+    .await
+    .unwrap();
+    on_tx.send(on).unwrap();
+    until("the refusal to replace a foreign xdg-open", 20, || async {
+        h.ui.activity_snapshot()
+            .iter()
+            .any(|a| a.category == "open" && a.message.contains("is not nettle's shim"))
+    })
+    .await;
+    let (out, _) = exec_capture(
+        &epoch.handle,
+        "cat ~/.local/bin/xdg-open; ls /tmp/nettle-$(id -u)/",
+    )
+    .await
+    .unwrap();
+    assert!(out.contains("echo mine"), "foreign file replaced: {out}");
+    assert!(!out.contains(".fifo"), "no watcher without the shim: {out}");
+    assert_eq!(h.opened.lock().unwrap().len(), 5);
+
+    let _ = exec_capture(&epoch.handle, CLEANUP).await;
+    opener.abort();
+    scanner.abort();
+    forwards.shutdown();
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
+/// The same inside Docker sandboxes: their watchers run through `sbx exec` on
+/// one shared channel, a sign-in in one gets its port forwarded from that
+/// sandbox, and with the "take over" option a link gets a local port that
+/// tunnels elsewhere.
+#[tokio::test]
+async fn xdg_open_in_a_sandbox_can_take_over_a_port() {
+    if !enabled() {
+        return;
+    }
+    const CLEANUP: &str = "kill $(cat ~/open-e2e.pid 2>/dev/null) 2>/dev/null; \
+        pkill -f '[n]c -p 4327' 2>/dev/null; \
+        rm -rf ~/.local/bin/xdg-open ~/.local/bin/www-browser ~/.local/bin/sbx ~/.sbx-fake \
+          ~/.config/nettle ~/open-e2e.pid /tmp/nettle-4242 /tmp/nettle-4243; true";
+    let _remote = REMOTE_STATE.lock().await;
+    let mut h = connect().await;
+    let epoch = wait_epoch(&mut h.epoch_rx, 1).await;
+    let _ = exec_capture(&epoch.handle, CLEANUP).await;
+    // A fake sandbox is the host under another `id -u`: its shim and its
+    // watcher meet in a runtime directory of their own, as in a real one.
+    // Two of them to begin with.
+    let install = format!(
+        "mkdir -p ~/.local/bin ~/.sbx-fake && cat > ~/.local/bin/sbx <<'EOF'\n{FAKE_SBX}EOF\n\
+         chmod +x ~/.local/bin/sbx \
+         && printf '#!/bin/sh\\necho \"${{SBX_FAKE_UID:-4242}}\"\\n' > ~/.sbx-fake/id \
+         && chmod +x ~/.sbx-fake/id && touch ~/.sbx-fake/two"
+    );
+    let (_, exit) = exec_capture(&epoch.handle, &install).await.unwrap();
+    assert_eq!(exit, Some(0));
+
+    let (live_tx, live_rx) = watch::channel(HashSet::new());
+    let (sbx_tx, sbx_rx) = watch::channel(Default::default());
+    let forwards = ForwardManager::new(
+        h.ui.clone(),
+        h.host.id,
+        h.store.clone(),
+        h.epoch_rx.clone(),
+        live_rx.clone(),
+        sbx_rx.clone(),
+    );
+    let scanner = scanner::spawn(
+        h.ui.clone(),
+        h.host.id,
+        h.epoch_rx.clone(),
+        forwards.clone(),
+        live_tx,
+        Default::default(),
+        h.cmd_tx.clone(),
+    );
+    let sandboxes = sandbox::spawn(
+        h.ui.clone(),
+        h.host.id,
+        h.store.clone(),
+        h.epoch_rx.clone(),
+        forwards.clone(),
+        sbx_tx,
+    );
+    let mut options = remote_open::Options {
+        enabled: true,
+        take_over: false,
+    };
+    let (options_tx, options_rx) = watch::channel(options);
+    let opener = remote_open::spawn(
+        h.ui.clone(),
+        h.host.id,
+        h.epoch_rx.clone(),
+        forwards.clone(),
+        live_rx,
+        sbx_rx,
+        options_rx,
+    );
+    let opened = h.opened.clone();
+    let was_opened = |link: &str| {
+        let (opened, link) = (opened.clone(), link.to_string());
+        move || {
+            let hit = opened.lock().unwrap().contains(&link);
+            async move { hit }
+        }
+    };
+    let logged = |needle: &str| {
+        h.ui.activity_snapshot()
+            .iter()
+            .any(|a| a.category == "open" && a.message.contains(needle))
+    };
+    // `xdg-open` as a program in a sandbox calls it.
+    let in_box = |name: &str, link: &str| {
+        format!("~/.local/bin/sbx exec {name} ~/.local/bin/xdg-open '{link}'")
+    };
+    let in_sandbox = |link: &str| in_box("sb-a", link);
+    // A live watcher in the runtime directory of the fake uid.
+    let watching = |uid: u16| {
+        format!(
+            "d=/tmp/nettle-{uid}; p=$(cat $d/open.pid 2>/dev/null) && kill -0 \"$p\" \
+             && test -p \"$d/open.$p.fifo\""
+        )
+    };
+
+    // One watcher on the host, one in each sandbox once the scanner found them.
+    watcher_pid(&epoch, None).await;
+    until("the watchers in both sandboxes", 30, || async {
+        let both = format!("{} && {}", watching(4242), watching(4243));
+        let (_, exit) = exec_capture(&epoch.handle, &both).await.unwrap();
+        exit == Some(0)
+    })
+    .await;
+
+    // Both arrive on the one channel, each under its sandbox's name.
+    let from_b = "https://example.com/from-the-second-sandbox";
+    let (_, exit) = exec_capture(&epoch.handle, &in_box("sb-b", from_b))
+        .await
+        .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the second sandbox's link", 10, was_opened(from_b)).await;
+    assert!(logged("/from-the-second-sandbox from sandbox sb-b"));
+
+    // The second sandbox goes away: its watcher ends, the first one's is
+    // started anew and keeps working.
+    exec_capture(&epoch.handle, "rm ~/.sbx-fake/two")
+        .await
+        .unwrap();
+    until("the watchers to follow the sandboxes", 30, || async {
+        let only_a = format!(
+            "! ls /tmp/nettle-4243/open.* >/dev/null 2>&1 && {}",
+            watching(4242)
+        );
+        let (_, exit) = exec_capture(&epoch.handle, &only_a).await.unwrap();
+        exit == Some(0)
+    })
+    .await;
+
+    // Each place's links arrive through its own watcher.
+    let from_sandbox = "https://example.com/from-the-sandbox";
+    let from_host = "https://example.com/from-the-host";
+    let (_, exit) = exec_capture(&epoch.handle, &in_sandbox(from_sandbox))
+        .await
+        .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the sandbox's link", 10, was_opened(from_sandbox)).await;
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        &format!("~/.local/bin/xdg-open '{from_host}'"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(0));
+    until("the host's link", 10, was_opened(from_host)).await;
+    assert!(logged("/from-the-sandbox from sandbox sb-a"));
+    assert!(logged("/from-the-host from the host"));
+    assert!(forwards.list().is_empty());
+
+    // A sign-in in the sandbox: its callback port is forwarded from the
+    // sandbox (through the `sbx exec` bridge), and removed when it closes.
+    let login_port: u16 = 43270;
+    let (_, exit) = exec_capture(
+        &epoch.handle,
+        &format!(
+            "nohup sh -c 'while true; do echo in-sandbox | nc -p {login_port} -l || sleep 1; done' \
+             >/dev/null 2>&1 & echo $! > ~/open-e2e.pid"
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit, Some(0));
+    let login = format!(
+        "https://sso.example.com/authorize?client_id=cli\
+         &redirect_uri=http%3A%2F%2F127.0.0.1%3A{login_port}%2Fcallback"
+    );
+    exec_capture(&epoch.handle, &in_sandbox(&login))
+        .await
+        .unwrap();
+    until("the sandbox's sign-in link", 10, was_opened(&login)).await;
+    let listed = forwards.list();
+    assert_eq!(
+        listed.len(),
+        1,
+        "the callback port is forwarded: {listed:?}"
+    );
+    assert_eq!(listed[0].sandbox.as_deref(), Some("sb-a"));
+    assert_eq!(
+        (listed[0].port, listed[0].local_port, listed[0].pinned),
+        (login_port, login_port, false)
+    );
+    let banner = banner_through(login_port).await;
+    assert!(banner.starts_with("via-sbx"), "got {banner:?}");
+    exec_capture(
+        &epoch.handle,
+        &format!("kill $(cat ~/open-e2e.pid); pkill -f '[n]c -p {login_port}'; true"),
+    )
+    .await
+    .unwrap();
+    until("the sandbox forward to be removed", 30, || async {
+        forwards.list().is_empty()
+    })
+    .await;
+
+    // The local port a sandbox sign-in needs already tunnels to the host.
+    let remote_port: u16 = env_or("NETTLE_E2E_REMOTE_SSH_PORT", "2222")
+        .parse()
+        .unwrap();
+    let taken_port: u16 = 43271;
+    forwards
+        .set_target(Target::host(remote_port), taken_port, true, false)
+        .await
+        .expect("forward the host's sshd");
+    let needs_taken = |attempt: u8| {
+        format!(
+            "https://sso.example.com/authorize?attempt={attempt}\
+             &redirect_uri=http%3A%2F%2Flocalhost%3A{taken_port}%2Fcallback"
+        )
+    };
+    // Without the option the forward is left alone, and the log says why.
+    exec_capture(&epoch.handle, &in_sandbox(&needs_taken(1)))
+        .await
+        .unwrap();
+    until(
+        "the link whose port is taken",
+        10,
+        was_opened(&needs_taken(1)),
+    )
+    .await;
+    let listed = forwards.list();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].sandbox.as_deref(), listed[0].port),
+        (None, remote_port)
+    );
+    assert!(logged(&format!(
+        "expects sandbox sb-a:{taken_port} on localhost:{taken_port}, which tunnels to remote {remote_port}"
+    )));
+    // With it, the local port is switched to the sandbox.
+    options.take_over = true;
+    options_tx.send(options).unwrap();
+    exec_capture(&epoch.handle, &in_sandbox(&needs_taken(2)))
+        .await
+        .unwrap();
+    until(
+        "the link that takes the port over",
+        10,
+        was_opened(&needs_taken(2)),
+    )
+    .await;
+    let listed = forwards.list();
+    assert_eq!(listed.len(), 1, "one listener, switched: {listed:?}");
+    assert_eq!(listed[0].sandbox.as_deref(), Some("sb-a"));
+    assert_eq!(
+        (listed[0].port, listed[0].local_port),
+        (taken_port, taken_port)
+    );
+
+    // A port of the sandbox that is forwarded under another local number is
+    // moved to its own, and keeps its pin.
+    let moved_port: u16 = 43272;
+    let moved = Target {
+        sandbox: Some("sb-a".into()),
+        port: moved_port,
+    };
+    forwards
+        .set_target(moved, 43273, true, true)
+        .await
+        .expect("forward under another number");
+    let needs_moved = format!(
+        "https://sso.example.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A{moved_port}%2F"
+    );
+    exec_capture(&epoch.handle, &in_sandbox(&needs_moved))
+        .await
+        .unwrap();
+    until(
+        "the link that moves a forward",
+        10,
+        was_opened(&needs_moved),
+    )
+    .await;
+    let listed = forwards.list();
+    let at_own = listed.iter().find(|f| f.port == moved_port).unwrap();
+    assert_eq!((at_own.local_port, at_own.pinned), (moved_port, true));
+    assert_eq!(listed.len(), 2, "moved, not added: {listed:?}");
+
+    // Option off: both watchers stop and the shim is removed.
+    options_tx.send(Default::default()).unwrap();
+    until("the shims to be removed", 30, || async {
+        let (_, exit) = exec_capture(
+            &epoch.handle,
+            "test ! -e ~/.local/bin/xdg-open && ! ls /tmp/nettle-4242/open.* >/dev/null 2>&1 \
+             && ! ls /tmp/nettle-$(id -u)/open.* >/dev/null 2>&1",
+        )
+        .await
+        .unwrap();
+        exit == Some(0)
+    })
+    .await;
+    assert_eq!(h.opened.lock().unwrap().len(), 7);
+
+    let _ = exec_capture(&epoch.handle, CLEANUP).await;
+    opener.abort();
+    sandboxes.abort();
+    scanner.abort();
+    forwards.shutdown();
+    h.cmd_tx.send(SessionCmd::Disconnect).unwrap();
+}
+
 #[tokio::test]
 async fn reconnect_creates_new_epoch_with_cached_auth() {
     if !enabled() {
@@ -756,7 +1365,10 @@ async fn vault_reuses_password_across_sessions() {
     // Second session: same vault + known_hosts, but NO prompt responder.
     // It must authenticate purely from the runtime vault.
     let (tx, _events) = mpsc::unbounded_channel();
-    let ui2 = UiBridge::new(Box::new(TestSink { tx }));
+    let ui2 = UiBridge::new(Box::new(TestSink {
+        tx,
+        opened: Default::default(),
+    }));
     let (cmd_tx2, mut epoch_rx2, _task) = SessionActor::spawn(
         ui2,
         h.host.clone(),

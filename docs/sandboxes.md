@@ -19,6 +19,7 @@ point at whichever sandbox you are working in.
 - [Using it](#using-it)
 - [Advertised ports](#advertised-ports)
 - [Services](#services)
+- [Links and sign-ins](#links-and-sign-ins)
 - [Telling the agent](#telling-the-agent)
 - [Setting up sandboxes](#setting-up-sandboxes) (with sbx-forge, or a kit of your own)
 - [Troubleshooting](#troubleshooting)
@@ -122,6 +123,24 @@ sandbox's default user, no `sh -c` quoting surprises in names):
 | `sbx-svc logs NAME -n LINES` | print the last LINES lines of its output |
 
 Names are `[A-Za-z0-9._-]`, starting with a letter or digit.
+
+## Links and sign-ins
+
+With **Edit host → Open links from this host in my browser** on, `xdg-open` in a running
+sandbox opens the link in the browser on your machine, the same way it does for the host
+([README](../README.md#opening-links-from-the-host-xdg-open)). A sign-in started by the
+agent, or a dev server launched with `--open`, lands in your browser, and the port it
+redirects to is forwarded from that sandbox for as long as it listens.
+
+- nettle writes `~/.local/bin/xdg-open` (and a `www-browser` link) into each running
+  sandbox, as the sandbox's default user. `~/.local/bin` has to come before any other
+  `xdg-open` on the agent's `PATH`.
+- All sandboxes' watchers share one SSH session on the host, however many sandboxes run.
+  It is started anew when a sandbox starts or stops.
+- Sandboxes usually run the same services on the same ports, so the port a sign-in needs
+  often tunnels to another sandbox already. By default that forward is left alone and the
+  activity log says so. **Let links take over local ports** (below the option) switches the
+  port to the sandbox the link came from, like *⇄ switch here*.
 
 ## Telling the agent
 
@@ -233,3 +252,5 @@ Kits apply when a sandbox is created; remove and recreate existing sandboxes to 
 | Advertised port not forwarded | the local port is busy (activity log), auto-forward is off in About, or you stopped it earlier (re-advertise it or reopen the host session). |
 | No Services panel | the sandbox has no `sbx-svc` (`sbx exec <sandbox> sbx-svc ls`). |
 | First request through a tunnel is slow | each new connection starts an `sbx exec` (~0.25 s); keep-alive helps. |
+| A link from a sandbox doesn't open | the option is off for the host, or `command -v xdg-open` in the sandbox isn't `~/.local/bin/xdg-open`; the activity log (category *open*) shows what nettle saw. |
+| A sign-in redirect lands in the wrong sandbox | its `localhost` port tunnels to another sandbox: switch it, or turn on *Let links take over local ports*. |

@@ -20,12 +20,25 @@ use crate::terminal::TerminalHandle;
 /// in tests it's a capture channel — the whole backend is headless-testable.
 pub trait EventSink: Send + Sync + 'static {
     fn emit_json(&self, event: &str, payload: serde_json::Value);
+
+    /// Open a web link in the user's default browser. A sink without a
+    /// desktop behind it says so.
+    fn open_url(&self, _url: &str) -> std::result::Result<(), String> {
+        Err("no browser to open it with".into())
+    }
 }
 
 impl<R: tauri::Runtime> EventSink for tauri::AppHandle<R> {
     fn emit_json(&self, event: &str, payload: serde_json::Value) {
         use tauri::Emitter;
         let _ = self.emit(event, payload);
+    }
+
+    fn open_url(&self, url: &str) -> std::result::Result<(), String> {
+        use tauri_plugin_opener::OpenerExt;
+        self.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -153,6 +166,12 @@ impl UiBridge {
 
     pub fn clear_activity(&self) {
         self.activity.lock().unwrap().entries.clear();
+    }
+
+    /// Open a web link in the default browser. Callers vet the link first
+    /// (see `remote_open::check_url`): this hands it to the system as is.
+    pub fn open_url(&self, url: &str) -> std::result::Result<(), String> {
+        self.sink.open_url(url)
     }
 
     fn emit<T: Serialize>(&self, event: &str, payload: &T) {
@@ -319,6 +338,11 @@ pub struct ActiveSession {
     pub sandbox_task: StdMutex<Option<JoinHandle<()>>>,
     /// Low-rate ticker that pushes changed connection stats to the UI.
     pub stats_task: StdMutex<Option<JoinHandle<()>>>,
+    /// How the host's `xdg-open` calls are handled; follows the host's
+    /// settings while the session is live.
+    pub xdg_open: tokio::sync::watch::Sender<crate::remote_open::Options>,
+    /// Watches the host for links to open (`remote_open`).
+    pub opener_task: StdMutex<Option<JoinHandle<()>>>,
 }
 
 pub type Sessions = std::collections::HashMap<uuid::Uuid, Arc<ActiveSession>>;

@@ -89,8 +89,24 @@ pub async fn exec_capture(
     handle: &client::Handle<ClientHandler>,
     cmd: &str,
 ) -> Result<(String, Option<u32>)> {
+    exec_capture_stdin(handle, cmd, &[]).await
+}
+
+/// [`exec_capture`] with `input` as the command's stdin (how a file gets
+/// written without quoting it into a command line).
+pub async fn exec_capture_stdin(
+    handle: &client::Handle<ClientHandler>,
+    cmd: &str,
+    input: &[u8],
+) -> Result<(String, Option<u32>)> {
     let mut channel = handle.channel_open_session().await?;
     channel.exec(true, cmd).await?;
+    if !input.is_empty() {
+        // A command that exits without reading its stdin closes the channel
+        // under us; its output and exit status still arrive below.
+        let _ = channel.data(input).await;
+        let _ = channel.eof().await;
+    }
     let mut out = Vec::new();
     let mut exit = None;
     while let Some(msg) = channel.wait().await {

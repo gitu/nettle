@@ -12,6 +12,13 @@ export interface HostConfig {
   port: number;
   username: string;
   keyPath?: string | null;
+  /** open links the host and its Docker sandboxes pass to `xdg-open` in the
+   *  local browser, forwarding the localhost ports they need (installs a small
+   *  shim there) */
+  interceptXdgOpen?: boolean;
+  /** such a link may take over the local port it needs when that port already
+   *  tunnels elsewhere (another sandbox, the host) */
+  linksTakeOverPorts?: boolean;
 }
 
 export type ConnState =

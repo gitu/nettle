@@ -146,6 +146,8 @@ const EMPTY_HOST: HostConfig = {
   port: 22,
   username: '',
   keyPath: '',
+  interceptXdgOpen: false,
+  linksTakeOverPorts: false,
 };
 
 export function HostModal() {
@@ -211,6 +213,42 @@ export function HostModal() {
           </div>
           {field('USERNAME', 'username', 'deploy')}
           {field('PRIVATE KEY PATH (OPTIONAL)', 'keyPath', '~/.ssh/id_ed25519 — agent is tried first')}
+          <label
+            className="about-setting host-setting"
+            onClick={() => setDraft({ ...draft, interceptXdgOpen: !draft.interceptXdgOpen })}
+          >
+            <span className={`toggle${draft.interceptXdgOpen ? ' on' : ''}`}>
+              <span className="toggle-knob" />
+            </span>
+            <span className="about-setting-label">
+              Open links from this host in my browser
+              <span className="setting-hint">
+                Intercepts <span className="mono">xdg-open</span> on the host and in its running
+                Docker sandboxes with a small script in <span className="mono">~/.local/bin</span>,
+                and forwards the localhost ports a sign-in redirects to while they listen.
+              </span>
+            </span>
+          </label>
+          {draft.interceptXdgOpen && (
+            <label
+              className="about-setting host-setting"
+              onClick={() =>
+                setDraft({ ...draft, linksTakeOverPorts: !draft.linksTakeOverPorts })
+              }
+            >
+              <span className={`toggle${draft.linksTakeOverPorts ? ' on' : ''}`}>
+                <span className="toggle-knob" />
+              </span>
+              <span className="about-setting-label">
+                Let links take over local ports
+                <span className="setting-hint">
+                  When a link needs <span className="mono">localhost:PORT</span> and that port
+                  already tunnels to another sandbox or the host, switch it to where the link came
+                  from instead of leaving it alone.
+                </span>
+              </span>
+            </label>
+          )}
         </div>
         <div className="modal-actions">
           {!isNew && (
