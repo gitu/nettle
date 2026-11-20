@@ -3,6 +3,7 @@ pub mod error;
 pub mod ipc;
 pub mod local_fs;
 pub mod ports;
+pub mod remote_open;
 pub mod sftp;
 pub mod ssh;
 pub mod state;

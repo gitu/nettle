@@ -425,7 +425,7 @@ impl ForwardManager {
 
 /// A free ephemeral local port, offered as a "try this instead" hint when the
 /// requested one is taken.
-async fn free_local_port() -> Option<u16> {
+pub(crate) async fn free_local_port() -> Option<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.ok()?;
     listener.local_addr().ok().map(|a| a.port())
 }

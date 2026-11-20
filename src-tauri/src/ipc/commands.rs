@@ -50,6 +50,12 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
         None => hosts.push(host.clone()),
     }
     state.store.save_hosts(hosts).await?;
+    // The xdg-open option applies to a live session right away.
+    if let Some(session) = state.sessions.lock().await.get(&host.id) {
+        session
+            .xdg_open
+            .send_if_modified(|on| std::mem::replace(on, host.intercept_xdg_open) != *on);
+    }
     state.ui.notify_hosts_changed();
     Ok(host)
 }
@@ -170,6 +176,16 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         let _ = forwards.set_target(target, local_port, true, true).await;
     }
 
+    let (xdg_open, xdg_open_rx) = watch::channel(host.intercept_xdg_open);
+    let opener_task = crate::remote_open::spawn(
+        ui.clone(),
+        host_id,
+        epoch_rx.clone(),
+        forwards.clone(),
+        ports_live_rx,
+        xdg_open_rx,
+    );
+
     // Stats change on hot paths (tunnel bytes); push them to the UI at a
     // fixed low rate and only when something changed.
     let stats_task = {
@@ -196,6 +212,8 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         scanner_task: StdMutex::new(Some(scanner_task)),
         sandbox_task: StdMutex::new(Some(sandbox_task)),
         stats_task: StdMutex::new(Some(stats_task)),
+        xdg_open,
+        opener_task: StdMutex::new(Some(opener_task)),
     });
     state.sessions.lock().await.insert(host_id, session);
     Ok(())
@@ -224,6 +242,11 @@ pub(crate) async fn teardown(state: &AppState, host_id: Uuid) {
         let ticker = old.stats_task.lock().unwrap().take();
         if let Some(ticker) = ticker {
             ticker.abort();
+        }
+        // The watcher on the host ends by itself once the connection is gone.
+        let opener = old.opener_task.lock().unwrap().take();
+        if let Some(opener) = opener {
+            opener.abort();
         }
         // The actor folds the uptime on Disconnect; if it didn't get there in
         // time this is a no-op for a link that already ended. Either way push

@@ -12,6 +12,11 @@ pub struct HostConfig {
     /// Optional path to a private key file; ssh-agent and password are always tried.
     #[serde(default)]
     pub key_path: Option<String>,
+    /// Open links the host passes to `xdg-open` in the local browser, and
+    /// forward the loopback ports they need (login callbacks). Installs a small
+    /// `xdg-open` shim on the host; see `remote_open`.
+    #[serde(default)]
+    pub intercept_xdg_open: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -147,6 +152,21 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_without_xdg_open_option_defaults_to_off() {
+        // hosts.json written before the option existed.
+        let json = r#"{ "id": "00000000-0000-0000-0000-000000000001", "name": "a",
+            "hostname": "a.example", "port": 22, "username": "u" }"#;
+        let host: HostConfig = serde_json::from_str(json).unwrap();
+        assert!(!host.intercept_xdg_open);
+        let back = serde_json::to_string(&HostConfig {
+            intercept_xdg_open: true,
+            ..host
+        })
+        .unwrap();
+        assert!(back.contains("\"interceptXdgOpen\":true"));
+    }
 
     #[test]
     fn settings_default_keeps_connections() {

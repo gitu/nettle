@@ -12,6 +12,9 @@ export interface HostConfig {
   port: number;
   username: string;
   keyPath?: string | null;
+  /** open links the host passes to `xdg-open` in the local browser, forwarding
+   *  the localhost ports they need (installs a small shim on the host) */
+  interceptXdgOpen?: boolean;
 }
 
 export type ConnState =
