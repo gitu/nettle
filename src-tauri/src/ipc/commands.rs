@@ -50,11 +50,12 @@ pub async fn save_host(state: State<'_, AppState>, mut host: HostConfig) -> Resu
         None => hosts.push(host.clone()),
     }
     state.store.save_hosts(hosts).await?;
-    // The xdg-open option applies to a live session right away.
+    // The xdg-open options apply to a live session right away.
     if let Some(session) = state.sessions.lock().await.get(&host.id) {
+        let options = crate::remote_open::Options::from(&host);
         session
             .xdg_open
-            .send_if_modified(|on| std::mem::replace(on, host.intercept_xdg_open) != *on);
+            .send_if_modified(|current| std::mem::replace(current, options) != options);
     }
     state.ui.notify_hosts_changed();
     Ok(host)
@@ -151,7 +152,7 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         state.store.clone(),
         epoch_rx.clone(),
         ports_live_rx.clone(),
-        sandbox_live_rx,
+        sandbox_live_rx.clone(),
     );
     let ignored_shared = Arc::new(StdMutex::new(ignored));
     let scanner_task = scanner::spawn(
@@ -176,13 +177,14 @@ pub(crate) async fn open_session(state: &AppState, host_id: Uuid) -> Result<()> 
         let _ = forwards.set_target(target, local_port, true, true).await;
     }
 
-    let (xdg_open, xdg_open_rx) = watch::channel(host.intercept_xdg_open);
+    let (xdg_open, xdg_open_rx) = watch::channel(crate::remote_open::Options::from(&host));
     let opener_task = crate::remote_open::spawn(
         ui.clone(),
         host_id,
         epoch_rx.clone(),
         forwards.clone(),
         ports_live_rx,
+        sandbox_live_rx,
         xdg_open_rx,
     );
 

@@ -338,9 +338,9 @@ pub struct ActiveSession {
     pub sandbox_task: StdMutex<Option<JoinHandle<()>>>,
     /// Low-rate ticker that pushes changed connection stats to the UI.
     pub stats_task: StdMutex<Option<JoinHandle<()>>>,
-    /// Whether the host's `xdg-open` calls are intercepted; follows the host
-    /// setting while the session is live.
-    pub xdg_open: tokio::sync::watch::Sender<bool>,
+    /// How the host's `xdg-open` calls are handled; follows the host's
+    /// settings while the session is live.
+    pub xdg_open: tokio::sync::watch::Sender<crate::remote_open::Options>,
     /// Watches the host for links to open (`remote_open`).
     pub opener_task: StdMutex<Option<JoinHandle<()>>>,
 }

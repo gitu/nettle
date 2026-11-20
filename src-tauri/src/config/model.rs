@@ -17,6 +17,11 @@ pub struct HostConfig {
     /// `xdg-open` shim on the host; see `remote_open`.
     #[serde(default)]
     pub intercept_xdg_open: bool,
+    /// A link opened that way may take over the local port it needs when that
+    /// port already tunnels elsewhere (another sandbox, the host), instead of
+    /// leaving the forward alone.
+    #[serde(default)]
+    pub links_take_over_ports: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -160,12 +165,15 @@ mod tests {
             "hostname": "a.example", "port": 22, "username": "u" }"#;
         let host: HostConfig = serde_json::from_str(json).unwrap();
         assert!(!host.intercept_xdg_open);
+        assert!(!host.links_take_over_ports);
         let back = serde_json::to_string(&HostConfig {
             intercept_xdg_open: true,
+            links_take_over_ports: true,
             ..host
         })
         .unwrap();
         assert!(back.contains("\"interceptXdgOpen\":true"));
+        assert!(back.contains("\"linksTakeOverPorts\":true"));
     }
 
     #[test]

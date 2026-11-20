@@ -381,6 +381,28 @@ pub fn exec_in_command(name: &str, cmd: &str) -> String {
     format!("{SBX_PATH}; sbx exec {name} sh -c '{cmd}' </dev/null")
 }
 
+/// Like [`exec_in_command`], with the SSH channel's stdin as the command's.
+pub fn exec_stdin_command(name: &str, cmd: &str) -> String {
+    format!("{SBX_PATH}; exec sbx exec -i {name} sh -c '{cmd}'")
+}
+
+/// One host command running `cmd` in each given (running) sandbox at once, so
+/// that long-lived commands in many sandboxes cost a single SSH session. They
+/// share the channel's stdin (which only ever delivers its end), and every
+/// line of their output is prefixed `@<name> `; `@<name> @@END` follows when
+/// a sandbox's command ends.
+pub fn exec_each_command(names: &[&str], cmd: &str) -> String {
+    let mut line = format!("{SBX_PATH}; exec 3<&0; ");
+    for name in names.iter().filter(|n| valid_name(n)) {
+        line.push_str(&format!(
+            "( sbx exec -i {name} sh -c '{cmd}' <&3 2>/dev/null | while IFS= read -r l; do \
+             printf \"@%s %s\\n\" {name} \"$l\"; done; printf \"@%s @@END\\n\" {name} ) & "
+        ));
+    }
+    line.push_str("wait");
+    line
+}
+
 /// Watch the host's sandboxes: `sbx ls` plus a port scan of every running one,
 /// published as `sandboxes-changed` and as the live-port map the forward
 /// manager waits on.
@@ -448,6 +470,7 @@ pub fn spawn(
                     let live: SandboxPorts = state
                         .sandboxes
                         .iter()
+                        .filter(|s| s.status == "running")
                         .map(|s| {
                             let ports = s.ports.iter().map(|p| (p.port, p.bind.clone())).collect();
                             (s.name.clone(), ports)
@@ -650,6 +673,17 @@ bad name\trunning\t1\tyes\tx\n\
         ));
         let l = service_logs_command("sb-a", "web", 300);
         assert!(l.contains("sh -c 'sbx-svc logs web -n 300 2>&1'"));
+        let i = exec_stdin_command("sb-a", "cat >/dev/null");
+        assert!(i.ends_with("exec sbx exec -i sb-a sh -c 'cat >/dev/null'"));
+        let each = exec_each_command(&["sb-a", "b;id", "sb-b"], "cat");
+        assert!(each.ends_with(
+            "exec 3<&0; \
+             ( sbx exec -i sb-a sh -c 'cat' <&3 2>/dev/null | while IFS= read -r l; do \
+             printf \"@%s %s\\n\" sb-a \"$l\"; done; printf \"@%s @@END\\n\" sb-a ) & \
+             ( sbx exec -i sb-b sh -c 'cat' <&3 2>/dev/null | while IFS= read -r l; do \
+             printf \"@%s %s\\n\" sb-b \"$l\"; done; printf \"@%s @@END\\n\" sb-b ) & wait"
+        ));
+        assert!(!each.contains("b;id"));
     }
 
     #[test]

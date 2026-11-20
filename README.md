@@ -42,9 +42,9 @@ day-to-day work against remote dev boxes:
   sandbox *advertises* are forwarded as soon as they listen, and its background
   services can be started, stopped and tailed from the app.
 - **Links open on your machine** — switch on *Open links from this host in my
-  browser* for a host and `xdg-open` there reaches your local browser. Browser
-  sign-ins started on the host complete, because nettle forwards the localhost
-  port the sign-in redirects to for as long as it listens.
+  browser* for a host and `xdg-open` there, and in its Docker sandboxes, reaches
+  your local browser. Browser sign-ins started there complete, because nettle
+  forwards the localhost port the sign-in redirects to for as long as it listens.
 - **Connection sets** — name a group of hosts and bring them all up with one
   click (e.g. "production" = api + db + cache).
 - **Tray-first** — closing the window hides nettle to the menu bar / system
@@ -159,19 +159,20 @@ A headless host has no browser, so a command that wants one (`gh auth login`,
 an OAuth sign-in with a localhost callback, `vite --open`) fails or asks you to
 copy a link. With **Edit host → Open links from this host in my browser** on,
 those links open on the machine nettle runs on. The option is per host, off by
-default, and applies to a connected host at once.
+default, and applies to a connected host at once. It covers the host and every
+running Docker sandbox on it.
 
-What nettle does on the host:
+What nettle does on the host, and in each running sandbox:
 
 - It writes a small shell script to `~/.local/bin/xdg-open` and, where that
-  name is free, links `~/.local/bin/www-browser` to it: on a host without a
-  display, Python's `webbrowser` and the `xdg-open` bundled with Node's `open`
-  package look for `www-browser` instead. An `xdg-open` already there that is
-  not nettle's is left alone, and the activity log says so.
+  name is free, links `~/.local/bin/www-browser` to it: without a display,
+  Python's `webbrowser` and the `xdg-open` bundled with Node's `open` package
+  look for `www-browser` instead. An `xdg-open` already there that is not
+  nettle's is left alone, and the activity log says so.
 - While nettle is connected, the script passes `http` and `https` links to
   nettle. Everything else (files, other schemes), and every call while nettle
   is away, goes to the next program of that name on `PATH`, so other sessions
-  on the host behave as before.
+  behave as before.
 - Switching the option off removes the script and the link again. That needs
   the host to be connected; otherwise delete the two by hand.
 
@@ -182,21 +183,29 @@ Ports are forwarded before the link opens, each to the same local port:
 - ports the calling program started listening on within the last two minutes,
   for sign-ins that pass their callback port in some other form.
 
-These forwards are not pinned and are removed once the port stops listening.
-An existing forward is never changed. If the local port is taken, the activity
-log says that the redirect will not arrive; a link to the host's own
-`localhost` opens on a free local port instead.
+A link from a sandbox gets the sandbox's port. These forwards are not pinned
+and are removed once the port stops listening.
+
+A sign-in redirects to a fixed `localhost:PORT`, so the local port has to be
+that number. When it already tunnels elsewhere (the same port of another
+sandbox, or the host), the forward is left alone and the activity log says that
+the redirect will not arrive. **Let links take over local ports**, next to the
+option, changes that: the port is switched to where the link came from, like
+*⇄ switch here* in the ports tab, and a pin moves along. A port another program
+on your machine holds cannot be taken over. A link to `localhost` itself opens
+on a free local port when it cannot have its own.
 
 Limits:
 
 - The script only takes over where `~/.local/bin` comes before any other
-  `xdg-open` in `PATH`; `command -v xdg-open` on the host shows which one runs.
-- A `$BROWSER` set on the host is what most tools use instead, and a tool that
+  `xdg-open` in `PATH`; `command -v xdg-open` shows which one runs.
+- A `$BROWSER` set there is what most tools use instead, and a tool that
   decides by itself that a host without a display has no browser prints its
   link as before.
-- It covers the host itself, not Docker sandboxes on it.
-- Finding the calling program's ports needs `/proc` and `ss` or `netstat` on
-  the host; ports named in the link need neither.
+- Finding the calling program's ports needs `/proc` and `ss` or `netstat`;
+  ports named in the link need neither.
+- Stopped sandboxes are never started for this. Their script stays until the
+  option is switched off while they run.
 
 ## Remote control (optional)
 
@@ -256,7 +265,7 @@ src-tauri/src/
 ├── terminal.rs PTY channel with output coalescing
 ├── sftp/       browse session + concurrent transfer queue
 ├── ports/      scanner + parsers + forward manager + Docker sandboxes (sbx)
-├── remote_open.rs  links the host opens with xdg-open, and their login ports
+├── remote_open.rs  links the host and its sandboxes open with xdg-open, and their login ports
 ├── stats.rs    per-host runtime connection statistics
 ├── web.rs      optional token-authorized HTTP control server (axum)
 └── ipc/        Tauri commands & typed event payloads

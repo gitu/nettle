@@ -101,6 +101,7 @@ mod tests {
             username: "deploy".into(),
             key_path: None,
             intercept_xdg_open: false,
+            links_take_over_ports: false,
         };
         store.save_hosts(vec![host.clone()]).await.unwrap();
         let loaded = store.load_hosts().await;
